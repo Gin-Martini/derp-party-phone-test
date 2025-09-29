@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Phone Test</title>
+    <style>
+      body{font-family:system-ui,Arial,sans-serif;padding:16px}
+      input,button{font-size:16px;margin:6px 0;padding:8px}
+      #playArea button{min-width:56px}
+      pre{background:#111;color:#0f0;padding:8px;height:240px;overflow:auto}
+      label{display:block;margin-top:8px}
+    </style>
+  </head>
+  <body>
+    <h3>Phone Test</h3>
+
+    <label>Relay WS URL</label>
+    <input id="wsurl" value="wss://relay.derpparty.xyz/socket" style="width:100%">
+
+    <label>HTTP Base</label>
+    <input id="httpbase" value="https://relay.derpparty.xyz" style="width:100%">
+
+    <label>Room Code</label>
+    <input id="room" placeholder="e.g. ABC123" style="width:100%">
+
+    <label>Name</label>
+    <input id="name" value="Player" style="width:100%">
+
+    <button id="btnJoin">Join Room</button>
+    <hr>
+
+    <div id="playArea" style="display:none">
+      <div>
+        <button onclick="sendAnswer('A')">A</button>
+        <button onclick="sendAnswer('B')">B</button>
+        <button onclick="sendAnswer('C')">C</button>
+        <button onclick="sendAnswer('D')">D</button>
+        <button onclick="sendCard()">Play Test Card</button>
+      </div>
+    </div>
+
+    <pre id="log"></pre>
+
+    <script>
+      let ws, playerId, roomId;
+      function log(x){
+        const el=document.getElementById('log');
+        el.textContent += x + "\n";
+        el.scrollTop = el.scrollHeight;
+      }
+      document.getElementById('btnJoin').onclick = async () => {
+        const wsurl = document.getElementById('wsurl').value.trim();
+        const httpbase = document.getElementById('httpbase').value.trim();
+        roomId = document.getElementById('room').value.trim().toUpperCase();
+        const name = document.getElementById('name').value.trim() || 'Player';
+        if(!roomId){ alert('Enter room code.'); return; }
+        try{
+          const resp = await fetch(`${httpbase}/rooms/${roomId}/join`, { method:'POST' });
+          if(!resp.ok){ log('Join HTTP failed: ' + resp.status); return; }
+          const j = await resp.json();
+          playerId = j.playerId;
+          log('Got playerId: ' + playerId);
+        }catch(e){ log('HTTP error: ' + e); return; }
+        ws = new WebSocket(wsurl);
+        ws.onopen = () => {
+          log('WS open.');
+          ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
+          document.getElementById('playArea').style.display = 'block';
+          setInterval(()=> {
+            if(ws && ws.readyState===1) ws.send(JSON.stringify({ type:'PING' }));
+          }, 5000);
+        };
+        ws.onmessage = (ev) => log('< ' + ev.data);
+        ws.onclose = () => log('WS closed.');
+      };
+      function sendAnswer(opt){
+        if(!ws) return;
+        ws.send(JSON.stringify({ type:'ANSWER_SUBMIT', option: opt, ts: Date.now() }));
+        log('> ANSWER_SUBMIT ' + opt);
+      }
+      function sendCard(){
+        if(!ws) return;
+        ws.send(JSON.stringify({ type:'CARD_INTENT', cardId:'TEST_BLOCK', ts: Date.now() }));
+        log('> CARD_INTENT TEST_BLOCK');
+      }
+    </script>
+  </body>
+</html>
