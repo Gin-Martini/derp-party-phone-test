@@ -150,7 +150,7 @@
       }
       function sendCard(){
         if(!ws) return;
-        // For now always sends a "Block" test card; change to Steal/Scramble manually to test
+        // Change "Block" -> "Steal"/"Scramble" to test other types quickly
         ws.send(JSON.stringify({ type:'CARD_INTENT', cardId:'Block', ts: Date.now() }));
         log('> CARD_INTENT Block');
       }
