@@ -8,7 +8,7 @@
       body{font-family:system-ui,Arial,sans-serif;padding:16px}
       input,button{font-size:16px;margin:6px 0;padding:8px}
       #playArea button{min-width:56px}
-      pre{background:#111;color:#0f0;padding:8px;height:220px;overflow:auto}
+      pre{background:#111;color:#0f0;padding:8px;height:160px;overflow:auto}
       label{display:block;margin-top:8px}
       #toast{
         position:fixed;left:50%;transform:translateX(-50%);bottom:24px;
@@ -19,6 +19,11 @@
       .row + .row{margin-top:10px}
       #status{margin:10px 0;padding:8px;border-radius:8px;background:#f2f2f7;font-size:14px}
       #playArea[disabled] {opacity:.5; pointer-events:none}
+      #qwrap{border:1px solid #ddd;border-radius:10px;padding:10px;margin:8px 0;display:none}
+      #qtext{font-weight:600;margin-bottom:6px}
+      .opt{display:flex;align-items:center;gap:8px}
+      .opt span.label{display:inline-block;width:22px;height:22px;border-radius:6px;background:#eee;text-align:center;line-height:22px;font-weight:700}
+      .opt div.txt{flex:1}
     </style>
   </head>
   <body>
@@ -34,6 +39,14 @@
     <hr>
 
     <div id="status">Status: Waiting to join…</div>
+
+    <div id="qwrap">
+      <div id="qtext">Question will appear here…</div>
+      <div class="opt"><span class="label">A</span><div id="qa" class="txt">—</div></div>
+      <div class="opt"><span class="label">B</span><div id="qb" class="txt">—</div></div>
+      <div class="opt"><span class="label">C</span><div id="qc" class="txt">—</div></div>
+      <div class="opt"><span class="label">D</span><div id="qd" class="txt">—</div></div>
+    </div>
 
     <div id="playArea" disabled style="display:none">
       <div class="row">
@@ -58,7 +71,6 @@
     <div id="toast"></div>
 
     <script>
-      // --- Defaults: edit here if you deploy elsewhere ---
       const WS_URL = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
 
@@ -82,6 +94,16 @@
         t.style.display='block';
         clearTimeout(showToast._to);
         showToast._to = setTimeout(()=> t.style.display='none', ms);
+      }
+
+      function showQuestion(q){
+        $('qwrap').style.display = 'block';
+        $('qtext').textContent = q.text || '';
+        const opts = q.options || [];
+        $('qa').textContent = opts[0]||'';
+        $('qb').textContent = opts[1]||'';
+        $('qc').textContent = opts[2]||'';
+        $('qd').textContent = opts[3]||'';
       }
 
       $('btnJoin').onclick = async () => {
@@ -112,16 +134,16 @@
           log('< ' + ev.data);
           try {
             const msg = JSON.parse(ev.data);
-            if (msg.type !== 'STATE') return; // host tunnels everything via STATE
+            if (msg.type !== 'STATE') return;
             const s = msg.state || {};
             switch(s.type){
-              // --- Round-0 flow types ---
               case 'LOBBY_STATE':
                 setStatus('Lobby: ' + ((s.players||[]).map(p => `${p.name}${p.ready?' ✅':''}`).join(', ') || '—'));
+                $('qwrap').style.display = 'none';
                 break;
 
               case 'READY_OPEN':
-                setStatus('Ready phase open.');
+                setStatus('Ready phase open. Tap “I’m Ready”.');
                 showToast('✋ Ready up!', 2000);
                 break;
               case 'READY_CLOSE':
@@ -132,12 +154,16 @@
                 setStatus(s.secondsLeft>0 ? `Starting in ${s.secondsLeft}…` : 'Go!');
                 break;
 
+              case 'QUESTION':
+                setStatus('Question shown. Prepare to answer.');
+                showQuestion(s);
+                break;
+
               case 'SCOREBOARD':
-                setStatus('Scoreboard shown.');
+                setStatus(`Scoreboard — correct: ${s.correct || '?'}`);
                 renderScoreboard(s.rows||[]);
                 break;
 
-              // --- Windows ---
               case 'ANSWER_WINDOW_OPEN':
                 setStatus(`Answer window open (${s.deadlineMs||0} ms)`);
                 showToast('✅ Answer window OPEN');
@@ -204,11 +230,10 @@
         ws.send(JSON.stringify({ type:'CARD_INTENT', cardId: kind, ts: Date.now() }));
         log('> CARD_INTENT ' + kind);
       }
-
       function renderScoreboard(rows){
         let s = '🏆 Scoreboard\n';
         (rows||[]).forEach((r,i)=> { s += `${i+1}. ${r.name} — ${r.coins}\n`; });
-        alert(s); // ultra-simple for now
+        alert(s);
       }
     </script>
   </body>
