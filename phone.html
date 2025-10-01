@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Phone Test</title>
+    <title>Derp Party – Phone</title>
     <style>
       body{font-family:system-ui,Arial,sans-serif;padding:16px}
       input,button{font-size:16px;margin:6px 0;padding:8px}
@@ -20,7 +20,7 @@
     </style>
   </head>
   <body>
-    <h3>Phone Test</h3>
+    <h3>Derp Party – Phone</h3>
 
     <label>Relay WS URL</label>
     <input id="wsurl" value="wss://relay.derpparty.xyz/socket" style="width:100%">
@@ -39,11 +39,16 @@
 
     <div id="playArea" style="display:none">
       <div class="row">
+        <button id="btnReady" onclick="sendReady()">I'm Ready</button>
+      </div>
+
+      <div class="row">
         <button onclick="sendAnswer('A')">A</button>
         <button onclick="sendAnswer('B')">B</button>
         <button onclick="sendAnswer('C')">C</button>
         <button onclick="sendAnswer('D')">D</button>
       </div>
+
       <div class="row">
         <button onclick="sendCard('Block')">Play Block</button>
         <button onclick="sendCard('Steal')">Play Steal</button>
@@ -101,6 +106,27 @@
             if (msg.type !== 'STATE') return; // host tunnels everything via STATE
             const s = msg.state || {};
             switch(s.type){
+              // --- New Round-0 flow types ---
+              case 'LOBBY_STATE':
+                renderLobby(s.players);
+                break;
+
+              case 'READY_OPEN':
+                showToast('✋ Ready up!', 2000);
+                break;
+              case 'READY_CLOSE':
+                showToast('Ready closed', 1000);
+                break;
+
+              case 'COUNTDOWN':
+                renderCountdown(s.secondsLeft|0);
+                break;
+
+              case 'SCOREBOARD':
+                renderScoreboard(s.rows||[]);
+                break;
+
+              // --- Existing window types ---
               case 'TEXT':
                 showToast('📣 ' + (s.message || 'State'));
                 break;
@@ -149,6 +175,12 @@
         ws.onclose = () => { log('WS closed.'); showToast('Disconnected', 1200); };
       };
 
+      function sendReady(){
+        if(!ws) return;
+        ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
+        log('> PLAYER_READY');
+      }
+
       function sendAnswer(opt){
         if(!ws) return;
         ws.send(JSON.stringify({ type:'ANSWER_SUBMIT', option: opt, ts: Date.now() }));
@@ -159,6 +191,23 @@
         if(!ws) return;
         ws.send(JSON.stringify({ type:'CARD_INTENT', cardId: kind, ts: Date.now() }));
         log('> CARD_INTENT ' + kind);
+      }
+
+      // --- Simple renders for new states ---
+      function renderLobby(players){
+        const names = (players||[]).map(p => `${p.name}${p.ready?' ✅':''}`).join(', ');
+        showToast(`Lobby: ${names||'—'}`, 1800);
+      }
+
+      function renderCountdown(n){
+        if (n>0) showToast(`Starting in ${n}…`, 900);
+        else showToast(`Go!`, 700);
+      }
+
+      function renderScoreboard(rows){
+        let s = '🏆 Scoreboard\n';
+        (rows||[]).forEach((r,i)=> { s += `${i+1}. ${r.name} — ${r.coins}\n`; });
+        alert(s); // ultra-simple for now
       }
     </script>
   </body>
