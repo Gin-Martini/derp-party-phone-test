@@ -17,16 +17,12 @@
       }
       .row{display:flex;gap:8px;flex-wrap:wrap}
       .row + .row{margin-top:10px}
+      #status{margin:10px 0;padding:8px;border-radius:8px;background:#f2f2f7;font-size:14px}
+      #playArea[disabled] {opacity:.5; pointer-events:none}
     </style>
   </head>
   <body>
     <h3>Derp Party – Phone</h3>
-
-    <label>Relay WS URL</label>
-    <input id="wsurl" value="wss://relay.derpparty.xyz/socket" style="width:100%">
-
-    <label>HTTP Base</label>
-    <input id="httpbase" value="https://relay.derpparty.xyz" style="width:100%">
 
     <label>Room Code</label>
     <input id="room" placeholder="e.g. ABC123" style="width:100%">
@@ -37,7 +33,9 @@
     <button id="btnJoin">Join Room</button>
     <hr>
 
-    <div id="playArea" style="display:none">
+    <div id="status">Status: Waiting to join…</div>
+
+    <div id="playArea" disabled style="display:none">
       <div class="row">
         <button id="btnReady" onclick="sendReady()">I'm Ready</button>
       </div>
@@ -60,42 +58,53 @@
     <div id="toast"></div>
 
     <script>
-      let ws, playerId, roomId;
+      // --- Defaults: edit here if you deploy elsewhere ---
+      const WS_URL = 'wss://relay.derpparty.xyz/socket';
+      const HTTP_BASE = 'https://relay.derpparty.xyz';
+
+      let ws, playerId, roomId, hbInterval;
+      const $ = (id)=>document.getElementById(id);
+
+      function setStatus(text){ $('status').textContent = 'Status: ' + text; }
+      function setPlayEnabled(on){
+        const pe = $('playArea');
+        if (!pe) return;
+        pe.style.display = on ? 'block' : 'none';
+        if (on) pe.removeAttribute('disabled'); else pe.setAttribute('disabled','');
+      }
 
       function log(x){
-        const el=document.getElementById('log');
-        el.textContent += x + "\n";
-        el.scrollTop = el.scrollHeight;
+        const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight;
       }
       function showToast(text, ms=1800){
-        const t=document.getElementById('toast');
+        const t=$('toast');
         t.textContent = text;
         t.style.display='block';
         clearTimeout(showToast._to);
         showToast._to = setTimeout(()=> t.style.display='none', ms);
       }
 
-      document.getElementById('btnJoin').onclick = async () => {
-        const wsurl = document.getElementById('wsurl').value.trim();
-        const httpbase = document.getElementById('httpbase').value.trim();
-        roomId = document.getElementById('room').value.trim().toUpperCase();
-        const name = document.getElementById('name').value.trim() || 'Player';
+      $('btnJoin').onclick = async () => {
+        roomId = $('room').value.trim().toUpperCase();
+        const name = $('name').value.trim() || 'Player';
         if(!roomId){ alert('Enter room code.'); return; }
 
         try{
-          const resp = await fetch(`${httpbase}/rooms/${roomId}/join`, { method:'POST' });
-          if(!resp.ok){ log('Join HTTP failed: ' + resp.status); return; }
+          const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, { method:'POST' });
+          if(!resp.ok){ log('Join HTTP failed: ' + resp.status); setStatus('Join failed'); return; }
           const j = await resp.json();
           playerId = j.playerId;
           log('Got playerId: ' + playerId);
-        }catch(e){ log('HTTP error: ' + e); return; }
+        }catch(e){ log('HTTP error: ' + e); setStatus('HTTP error'); return; }
 
-        ws = new WebSocket(wsurl);
+        ws = new WebSocket(WS_URL);
         ws.onopen = () => {
           log('WS open.');
+          setStatus('Connected. In Lobby.');
           ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
-          document.getElementById('playArea').style.display = 'block';
-          setInterval(()=> {
+          setPlayEnabled(true);
+          clearInterval(hbInterval);
+          hbInterval = setInterval(()=> {
             try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {}
           }, 5000);
         };
@@ -106,55 +115,55 @@
             if (msg.type !== 'STATE') return; // host tunnels everything via STATE
             const s = msg.state || {};
             switch(s.type){
-              // --- New Round-0 flow types ---
+              // --- Round-0 flow types ---
               case 'LOBBY_STATE':
-                renderLobby(s.players);
+                setStatus('Lobby: ' + ((s.players||[]).map(p => `${p.name}${p.ready?' ✅':''}`).join(', ') || '—'));
                 break;
 
               case 'READY_OPEN':
+                setStatus('Ready phase open.');
                 showToast('✋ Ready up!', 2000);
                 break;
               case 'READY_CLOSE':
-                showToast('Ready closed', 1000);
+                setStatus('Ready closed.');
                 break;
 
               case 'COUNTDOWN':
-                renderCountdown(s.secondsLeft|0);
+                setStatus(s.secondsLeft>0 ? `Starting in ${s.secondsLeft}…` : 'Go!');
                 break;
 
               case 'SCOREBOARD':
+                setStatus('Scoreboard shown.');
                 renderScoreboard(s.rows||[]);
                 break;
 
-              // --- Existing window types ---
-              case 'TEXT':
-                showToast('📣 ' + (s.message || 'State'));
-                break;
-
+              // --- Windows ---
               case 'ANSWER_WINDOW_OPEN':
-                showToast('✅ Answer window OPEN (' + (s.deadlineMs||0) + ' ms)');
+                setStatus(`Answer window open (${s.deadlineMs||0} ms)`);
+                showToast('✅ Answer window OPEN');
                 break;
               case 'ANSWER_WINDOW_CLOSE':
+                setStatus('Answer window closed.');
                 showToast('⛔ Answer window CLOSED', 1200);
                 break;
 
               case 'TRICK_WINDOW_OPEN': {
                 let types = [];
                 try { types = JSON.parse(s.typesAllowedJson || '[]'); } catch {}
-                showToast('🎭 Trick window OPEN (' + (s.deadlineMs||0) + ' ms) ' + (types.length?('['+types.join(', ')+']'):'[]'), 2000);
+                setStatus(`Trick window open (${s.deadlineMs||0} ms) [${types.join(', ')}]`);
+                showToast('🎭 Trick window OPEN', 1800);
                 break;
               }
               case 'TRICK_WINDOW_CLOSE':
+                setStatus('Trick window closed.');
                 showToast('🪄 Trick window CLOSED', 1200);
                 break;
 
               case 'CARD_ACK':
-                if (s.playerId === playerId)
-                  showToast('✅ Your ' + s.cardType + ' locked in!');
+                if (s.playerId === playerId) showToast('✅ Your ' + s.cardType + ' locked in!');
                 break;
               case 'CARD_REJECT':
-                if (s.playerId === playerId)
-                  showToast('❌ ' + (s.cardType||'Card') + ' rejected (' + (s.reason||'') + ')', 2000);
+                if (s.playerId === playerId) showToast('❌ ' + (s.cardType||'Card') + ' rejected (' + (s.reason||'') + ')', 2000);
                 break;
 
               case 'RESOLVE_RESULT': {
@@ -172,7 +181,12 @@
             }
           } catch(_) {}
         };
-        ws.onclose = () => { log('WS closed.'); showToast('Disconnected', 1200); };
+        ws.onclose = () => {
+          log('WS closed.');
+          setStatus('Disconnected');
+          setPlayEnabled(false);
+          clearInterval(hbInterval);
+        };
       };
 
       function sendReady(){
@@ -180,28 +194,15 @@
         ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
         log('> PLAYER_READY');
       }
-
       function sendAnswer(opt){
         if(!ws) return;
         ws.send(JSON.stringify({ type:'ANSWER_SUBMIT', option: opt, ts: Date.now() }));
         log('> ANSWER_SUBMIT ' + opt);
       }
-
       function sendCard(kind){
         if(!ws) return;
         ws.send(JSON.stringify({ type:'CARD_INTENT', cardId: kind, ts: Date.now() }));
         log('> CARD_INTENT ' + kind);
-      }
-
-      // --- Simple renders for new states ---
-      function renderLobby(players){
-        const names = (players||[]).map(p => `${p.name}${p.ready?' ✅':''}`).join(', ');
-        showToast(`Lobby: ${names||'—'}`, 1800);
-      }
-
-      function renderCountdown(n){
-        if (n>0) showToast(`Starting in ${n}…`, 900);
-        else showToast(`Go!`, 700);
       }
 
       function renderScoreboard(rows){
