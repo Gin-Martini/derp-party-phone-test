@@ -3,109 +3,176 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Derp Party – Phone</title>
+    <title>Derp Party – Phone (Lobby)</title>
     <style>
-      body{font-family:system-ui,Arial,sans-serif;padding:16px}
-      input,button{font-size:16px;margin:6px 0;padding:8px}
-      #playArea button{min-width:56px}
-      pre{background:#111;color:#0f0;padding:8px;height:160px;overflow:auto}
-      label{display:block;margin-top:8px}
-      #toast{
-        position:fixed;left:50%;transform:translateX(-50%);bottom:24px;
-        background:#222;color:#fff;padding:12px 16px;border-radius:10px;
-        box-shadow:0 6px 18px rgba(0,0,0,.35);display:none;max-width:90%;text-align:center
-      }
+      :root{--bg:#0b0b0d;--fg:#f6f6f7;--muted:#9aa0a6;--card:#16161a;--accent:#7dd3fc}
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
+      .wrap{padding:16px;max-width:640px;margin:0 auto}
+      h3{margin:10px 0 8px}
+      label{display:block;margin:10px 0 6px;color:var(--muted);font-size:14px}
+      input,button{font-size:16px;padding:10px;border-radius:10px;border:1px solid #2a2a2f;background:#111115;color:var(--fg)}
+      input{width:100%}
       .row{display:flex;gap:8px;flex-wrap:wrap}
       .row + .row{margin-top:10px}
-      #status{margin:10px 0;padding:8px;border-radius:8px;background:#f2f2f7;font-size:14px}
-      #playArea[disabled] {opacity:.5; pointer-events:none}
-      #qwrap{border:1px solid #ddd;border-radius:10px;padding:10px;margin:8px 0;display:none}
-      #qtext{font-weight:600;margin-bottom:6px}
-      .opt{display:flex;align-items:center;gap:8px}
-      .opt span.label{display:inline-block;width:22px;height:22px;border-radius:6px;background:#eee;text-align:center;line-height:22px;font-weight:700}
-      .opt div.txt{flex:1}
+      .card{background:var(--card);border-radius:14px;padding:12px;border:1px solid #27272a}
+      #status{margin:12px 0 10px;padding:10px;border-radius:10px;background:#101014;border:1px solid #222;text-wrap:balance}
+      #log{background:#0d0d10;color:#9ee5b2;padding:8px;height:160px;overflow:auto;border-radius:10px;border:1px solid #232326}
+      #toast{
+        position:fixed;left:50%;transform:translateX(-50%);bottom:24px;
+        background:#222;color:#fff;padding:12px 16px;border-radius:12px;
+        box-shadow:0 8px 24px rgba(0,0,0,.45);display:none;max-width:90%;text-align:center;z-index:9999
+      }
+      #playArea[disabled]{opacity:.6;pointer-events:none}
+      #charGrid{display:none;margin:10px 0;gap:10px;
+        display:grid;grid-template-columns:repeat(4, minmax(0, 1fr))}
+      #charGrid button{aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;font-size:28px}
+      #charGrid button.taken{opacity:.4;border-style:dashed}
+      .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#17171b;border:1px solid #2a2a2f;font-size:12px;color:#c7cad1}
+      .pill.green{border-color:#2e7d32;color:#9be49e}
+      .pill.red{border-color:#8b2e2e;color:#f0aaaa}
+      .spacer{height:8px}
+      .hidden{display:none !important}
+      .btn-primary{border-color:#2563eb;background:#1e40af}
+      .btn-accent{border-color:#155e75;background:#0e3a47}
     </style>
   </head>
   <body>
-    <h3>Derp Party – Phone</h3>
+    <div class="wrap">
+      <h3>Derp Party – Phone</h3>
 
-    <label>Room Code</label>
-    <input id="room" placeholder="e.g. ABC123" style="width:100%">
+      <div class="card">
+        <label>Room Code</label>
+        <input id="room" placeholder="e.g. ABC123">
 
-    <label>Name</label>
-    <input id="name" value="Player" style="width:100%">
+        <label>Name</label>
+        <input id="name" placeholder="Your name" value="Player">
 
-    <button id="btnJoin">Join Room</button>
-    <hr>
+        <div class="row" style="margin-top:10px">
+          <button id="btnJoin" class="btn-primary">Join Room</button>
+        </div>
+      </div>
 
-    <div id="status">Status: Waiting to join…</div>
+      <div id="status" class="pill">Status: Waiting to join…</div>
 
-    <div id="qwrap">
-      <div id="qtext">Question will appear here…</div>
-      <div class="opt"><span class="label">A</span><div id="qa" class="txt">—</div></div>
-      <div class="opt"><span class="label">B</span><div id="qb" class="txt">—</div></div>
-      <div class="opt"><span class="label">C</span><div id="qc" class="txt">—</div></div>
-      <div class="opt"><span class="label">D</span><div id="qd" class="txt">—</div></div>
+      <div id="lobbyArea" class="card hidden">
+        <div class="row" style="align-items:center;justify-content:space-between">
+          <div class="pill">Pick a character, then tap “I’m Ready”.</div>
+          <div id="readyPill" class="pill red">Not Ready</div>
+        </div>
+
+        <div id="charGrid"></div>
+
+        <div class="row" style="margin-top:10px">
+          <button id="btnReady" class="btn-accent">I’m Ready</button>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+      <pre id="log"></pre>
+      <div id="toast"></div>
     </div>
-
-    <div id="playArea" disabled style="display:none">
-      <div class="row">
-        <button id="btnReady" onclick="sendReady()">I'm Ready</button>
-      </div>
-
-      <div class="row">
-        <button onclick="sendAnswer('A')">A</button>
-        <button onclick="sendAnswer('B')">B</button>
-        <button onclick="sendAnswer('C')">C</button>
-        <button onclick="sendAnswer('D')">D</button>
-      </div>
-
-      <div class="row">
-        <button onclick="sendCard('Block')">Play Block</button>
-        <button onclick="sendCard('Steal')">Play Steal</button>
-        <button onclick="sendCard('Scramble')">Play Scramble</button>
-      </div>
-    </div>
-
-    <pre id="log"></pre>
-    <div id="toast"></div>
 
     <script>
-      const WS_URL = 'wss://relay.derpparty.xyz/socket';
+      // --- Config (adjust if needed) ---
+      const WS_URL    = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
 
+      // --- State ---
       let ws, playerId, roomId, hbInterval;
+      let myReady = false;
+      let myCharId = null;
+
       const $ = (id)=>document.getElementById(id);
 
-      function setStatus(text){ $('status').textContent = 'Status: ' + text; }
-      function setPlayEnabled(on){
-        const pe = $('playArea');
-        if (!pe) return;
-        pe.style.display = on ? 'block' : 'none';
-        if (on) pe.removeAttribute('disabled'); else pe.setAttribute('disabled','');
+      // --- UI utils ---
+      function log(x){ const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight; }
+      function showToast(text, ms=1600){
+        const t=$('toast'); t.textContent = text; t.style.display='block';
+        clearTimeout(showToast._to); showToast._to = setTimeout(()=> t.style.display='none', ms);
+      }
+      function setStatus(text, pill=false){
+        const el=$('status'); el.textContent = 'Status: ' + text;
+        if (pill){ el.classList.add('pill'); } else { el.classList.remove('pill'); }
+      }
+      function setLobbyVisible(on){
+        $('lobbyArea').classList.toggle('hidden', !on);
+      }
+      function setReadyPill(on){
+        const p=$('readyPill');
+        p.textContent = on ? 'Ready' : 'Not Ready';
+        p.classList.toggle('green', on);
+        p.classList.toggle('red', !on);
       }
 
-      function log(x){
-        const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight;
-      }
-      function showToast(text, ms=1800){
-        const t=$('toast');
-        t.textContent = text;
-        t.style.display='block';
-        clearTimeout(showToast._to);
-        showToast._to = setTimeout(()=> t.style.display='none', ms);
+      // --- Character Grid ---
+      const takenChars = new Set();
+
+      function ensureGrid(){
+        const grid = $('charGrid');
+        if (!grid.dataset.built) {
+          // built on first catalog message
+          grid.dataset.built = '1';
+        }
+        return grid;
       }
 
-      function showQuestion(q){
-        $('qwrap').style.display = 'block';
-        $('qtext').textContent = q.text || '';
-        const opts = q.options || [];
-        $('qa').textContent = opts[0]||'';
-        $('qb').textContent = opts[1]||'';
-        $('qc').textContent = opts[2]||'';
-        $('qd').textContent = opts[3]||'';
+      function renderCatalog(entries){
+        const grid = $('charGrid');
+        grid.innerHTML = '';
+        (entries||[]).forEach(e=>{
+          const btn = document.createElement('button');
+          btn.textContent = e.label || e.id;
+          btn.title = e.id;
+          btn.dataset.charId = e.id;
+          btn.onclick = () => sendCharSelect(e.id);
+          grid.appendChild(btn);
+        });
+        grid.style.display = 'grid';
+        markTaken([...takenChars]); // apply any known taken state
       }
 
+      function markTaken(list){
+        takenChars.clear();
+        (list||[]).forEach(id => takenChars.add(id));
+        const grid = $('charGrid');
+        [...grid.querySelectorAll('button')].forEach(b=>{
+          const id = b.dataset.charId;
+          const isTaken = takenChars.has(id);
+          b.disabled = isTaken && id !== myCharId; // allow re-click on your own choice
+          b.classList.toggle('taken', isTaken && id !== myCharId);
+          // highlight my own pick a bit
+          if (id === myCharId){ b.style.outline = '2px solid var(--accent)'; b.style.outlineOffset = '1px'; }
+          else { b.style.outline = 'none'; }
+        });
+      }
+
+      function applyCharacterPicked(playerIdPicked, charIdPicked){
+        // If it's me, set my selection
+        if (playerIdPicked === playerId){
+          myCharId = charIdPicked;
+          showToast('Picked: ' + charIdPicked);
+        }
+        takenChars.add(charIdPicked);
+        markTaken([...takenChars]);
+      }
+
+      // --- Sending ---
+      function sendReady(){
+        if(!ws) return;
+        if (!myCharId){ showToast('Pick a character first'); return; }
+        myReady = true;
+        setReadyPill(true);
+        ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
+        log('> PLAYER_READY');
+      }
+
+      function sendCharSelect(charId){
+        if(!ws) return;
+        ws.send(JSON.stringify({ type:'CHARACTER_SELECT', charId, ts: Date.now() }));
+        log('> CHARACTER_SELECT ' + charId);
+      }
+
+      // --- Join flow ---
       $('btnJoin').onclick = async () => {
         roomId = $('room').value.trim().toUpperCase();
         const name = $('name').value.trim() || 'Player';
@@ -122,119 +189,76 @@
         ws = new WebSocket(WS_URL);
         ws.onopen = () => {
           log('WS open.');
-          setStatus('Connected. In Lobby.');
           ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
-          setPlayEnabled(true);
+          setStatus('Connected. In Lobby.', true);
+          setLobbyVisible(true);
           clearInterval(hbInterval);
           hbInterval = setInterval(()=> {
             try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {}
           }, 5000);
         };
+
         ws.onmessage = (ev) => {
           log('< ' + ev.data);
           try {
             const msg = JSON.parse(ev.data);
+            if (msg.type === 'PONG') return;
             if (msg.type !== 'STATE') return;
             const s = msg.state || {};
             switch(s.type){
+              // --- Lobby states ---
+              case 'CHARACTER_CATALOG':
+                ensureGrid();
+                renderCatalog(s.entries||[]);
+                break;
+
               case 'LOBBY_STATE':
-                setStatus('Lobby: ' + ((s.players||[]).map(p => `${p.name}${p.ready?' ✅':''}`).join(', ') || '—'));
-                $('qwrap').style.display = 'none';
+                setStatus('Lobby: ' + ((s.players||[]).map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ') || '—'), true);
+                markTaken(s.taken||[]);
+                break;
+
+              case 'CHARACTER_TAKEN':
+                takenChars.add(s.charId);
+                markTaken([...takenChars]);
+                break;
+
+              case 'CHARACTER_PICKED':
+                applyCharacterPicked(s.playerId, s.charId);
                 break;
 
               case 'READY_OPEN':
-                setStatus('Ready phase open. Tap “I’m Ready”.');
-                showToast('✋ Ready up!', 2000);
+                // scene 2 uses host-controlled start; but we might still receive this from host tools
+                showToast('Ready phase open');
                 break;
+
               case 'READY_CLOSE':
-                setStatus('Ready closed.');
+                showToast('Ready closed');
                 break;
 
-              case 'COUNTDOWN':
-                setStatus(s.secondsLeft>0 ? `Starting in ${s.secondsLeft}…` : 'Go!');
+              case 'LOBBY_LOCKED':
+                setStatus('Game starting…', true);
+                $('lobbyArea').classList.add('hidden');
                 break;
 
-              case 'QUESTION':
-                setStatus('Question shown. Prepare to answer.');
-                showQuestion(s);
+              // --- Fallback text messages (e.g., host disconnects) ---
+              case 'TEXT':
+                showToast('📣 ' + (s.message || 'Info'));
                 break;
-
-              case 'SCOREBOARD':
-                setStatus(`Scoreboard — correct: ${s.correct || '?'}`);
-                renderScoreboard(s.rows||[]);
-                break;
-
-              case 'ANSWER_WINDOW_OPEN':
-                setStatus(`Answer window open (${s.deadlineMs||0} ms)`);
-                showToast('✅ Answer window OPEN');
-                break;
-              case 'ANSWER_WINDOW_CLOSE':
-                setStatus('Answer window closed.');
-                showToast('⛔ Answer window CLOSED', 1200);
-                break;
-
-              case 'TRICK_WINDOW_OPEN': {
-                let types = [];
-                try { types = JSON.parse(s.typesAllowedJson || '[]'); } catch {}
-                setStatus(`Trick window open (${s.deadlineMs||0} ms) [${types.join(', ')}]`);
-                showToast('🎭 Trick window OPEN', 1800);
-                break;
-              }
-              case 'TRICK_WINDOW_CLOSE':
-                setStatus('Trick window closed.');
-                showToast('🪄 Trick window CLOSED', 1200);
-                break;
-
-              case 'CARD_ACK':
-                if (s.playerId === playerId) showToast('✅ Your ' + s.cardType + ' locked in!');
-                break;
-              case 'CARD_REJECT':
-                if (s.playerId === playerId) showToast('❌ ' + (s.cardType||'Card') + ' rejected (' + (s.reason||'') + ')', 2000);
-                break;
-
-              case 'RESOLVE_RESULT': {
-                const applied = (s.applied||[]).map(a => (a.cardType + ' by ' + a.playerId)).join(', ');
-                const skipped = (s.skipped||[]).map(a => (a.cardType + ' by ' + a.playerId + ' ('+a.reason+')')).join(', ');
-                const parts = [];
-                if (applied) parts.push('✓ ' + applied);
-                if (skipped) parts.push('⨯ ' + skipped);
-                if (s.cancelled) parts.push('🚫 Cancelled');
-                if (s.newOwnerId) parts.push('👑 Owner: ' + s.newOwnerId);
-                if (s.scrambled) parts.push('🔀 Scramble');
-                showToast(parts.join(' | ') || 'Resolved', 2500);
-                break;
-              }
             }
-          } catch(_) {}
+          } catch(e) {
+            console.error(e);
+          }
         };
+
         ws.onclose = () => {
           log('WS closed.');
           setStatus('Disconnected');
-          setPlayEnabled(false);
+          setLobbyVisible(false);
           clearInterval(hbInterval);
         };
       };
 
-      function sendReady(){
-        if(!ws) return;
-        ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
-        log('> PLAYER_READY');
-      }
-      function sendAnswer(opt){
-        if(!ws) return;
-        ws.send(JSON.stringify({ type:'ANSWER_SUBMIT', option: opt, ts: Date.now() }));
-        log('> ANSWER_SUBMIT ' + opt);
-      }
-      function sendCard(kind){
-        if(!ws) return;
-        ws.send(JSON.stringify({ type:'CARD_INTENT', cardId: kind, ts: Date.now() }));
-        log('> CARD_INTENT ' + kind);
-      }
-      function renderScoreboard(rows){
-        let s = '🏆 Scoreboard\n';
-        (rows||[]).forEach((r,i)=> { s += `${i+1}. ${r.name} — ${r.coins}\n`; });
-        alert(s);
-      }
+      $('btnReady').onclick = sendReady;
     </script>
   </body>
 </html>
