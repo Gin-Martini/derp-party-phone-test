@@ -46,12 +46,8 @@
         display:flex;align-items:center;justify-content:center;
         border:1px solid #2a2a2f;overflow:hidden;
       }
-      .portrait img{
-        width:100%;height:100%;object-fit:cover;display:block;
-      }
-      .portrait .fallback{
-        font-size:22px;color:#e5e7eb;
-      }
+      .portrait img{ width:100%;height:100%;object-fit:cover;display:block; }
+      .portrait .fallback{ font-size:22px;color:#e5e7eb; }
       .charBtn .name{font-size:14px;color:#e5e7eb}
       .charBtn.taken{opacity:.4;border-style:dashed}
       .charBtn.selected{outline:2px solid var(--accent);outline-offset:2px}
@@ -97,58 +93,25 @@
     </div>
 
     <script>
-      // =========================
-      // Config
-      // =========================
       const WS_URL    = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
 
-      // =========================
-      // State
-      // =========================
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
       let myCharId = null;
-      let knownCatalog = [];  // [{id,label,portraitUrl}?]
+      let knownCatalog = [];
       const takenChars = new Set();
 
       const $ = (id)=>document.getElementById(id);
 
-      // =========================
-      // UI utils
-      // =========================
       function log(x){ const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight; }
-      function showToast(text, ms=1600){
-        const t=$('toast'); t.textContent = text; t.style.display='block';
-        clearTimeout(showToast._to); showToast._to = setTimeout(()=> t.style.display='none', ms);
-      }
-      function setStatus(text, pill=false){
-        const el=$('status'); el.textContent = 'Status: ' + text;
-        if (pill){ el.classList.add('pill'); } else { el.classList.remove('pill'); }
-      }
-      function setLobbyVisible(on){
-        $('lobbyArea').classList.toggle('hidden', !on);
-      }
-      function setReadyPill(on){
-        const p=$('readyPill');
-        p.textContent = on ? 'Ready' : 'Not Ready';
-        p.classList.toggle('ok', on);
-        p.classList.toggle('no', !on);
-      }
-      function enableReadyButton(can){
-        const b=$('btnReady');
-        b.disabled = !can;
-        b.classList.toggle('btn-disabled', !can);
-      }
+      function showToast(text, ms=1600){ const t=$('toast'); t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
+      function setStatus(text, pill=false){ const el=$('status'); el.textContent='Status: '+text; if(pill){el.classList.add('pill')}else{el.classList.remove('pill')} }
+      function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
+      function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
+      function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
 
-      // =========================
-      // Character Grid
-      // =========================
-      function ensureGridVisible(){
-        const grid = $('charGrid');
-        grid.style.display = 'grid';
-        return grid;
-      }
+      function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
 
       function renderCatalog(entries){
         knownCatalog = entries || [];
@@ -156,49 +119,44 @@
         grid.innerHTML = '';
 
         knownCatalog.forEach(e=>{
-            const id = e.id;
-            const label = e.label || e.id;
-            const portraitUrl = e.portraitUrl || "";
+          const id    = e.id;
+          const label = e.label || e.id;
+          const url   = e.portraitUrl || e.imageUrl || e.url || "";
+          const data  = e.portraitData || e.portrait || "";
 
-            const btn = document.createElement('button');
-            btn.className = 'charBtn';
-            btn.dataset.charId = id;
-            btn.setAttribute('type','button');
-            btn.onclick = () => onCharClicked(id);
+          const btn = document.createElement('button');
+          btn.className = 'charBtn';
+          btn.dataset.charId = id;
+          btn.type = 'button';
+          btn.onclick = () => onCharClicked(id);
 
-            const portrait = document.createElement('div');
-            portrait.className = 'portrait';
+          const portrait = document.createElement('div');
+          portrait.className = 'portrait';
 
-            if (portraitUrl){
-              const img = document.createElement('img');
-              img.loading = 'lazy';
-              img.decoding = 'async';
-              img.src = portraitUrl;
-
-              // If the image fails, swap to fallback initials
-              img.onerror = () => {
-                portrait.innerHTML = '';
-                const fb = document.createElement('div');
-                fb.className = 'fallback';
-                fb.textContent = label.slice(0,2).toUpperCase();
-                portrait.appendChild(fb);
-              };
-
-              portrait.appendChild(img);
-            } else {
-              const fb = document.createElement('div');
-              fb.className = 'fallback';
-              fb.textContent = label.slice(0,2).toUpperCase();
+          const src = url || data;
+          if (src){
+            const img = document.createElement('img');
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.src = src;
+            img.onerror = () => {
+              portrait.innerHTML='';
+              const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
               portrait.appendChild(fb);
-            }
+            };
+            portrait.appendChild(img);
+          } else {
+            const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
+            portrait.appendChild(fb);
+          }
 
-            const name = document.createElement('div');
-            name.className = 'name';
-            name.textContent = label;
+          const name = document.createElement('div');
+          name.className = 'name';
+          name.textContent = label;
 
-            btn.appendChild(portrait);
-            btn.appendChild(name);
-            grid.appendChild(btn);
+          btn.appendChild(portrait);
+          btn.appendChild(name);
+          grid.appendChild(btn);
         });
 
         markTaken([...takenChars]);
@@ -230,32 +188,21 @@
 
       function onCharClicked(id){
         if (!ws) return;
-        if (takenChars.has(id) && id !== myCharId){
-          showToast('That character is taken.');
-          return;
-        }
+        if (takenChars.has(id) && id !== myCharId){ showToast('That character is taken.'); return; }
         ws.send(JSON.stringify({ type:'CHARACTER_SELECT', charId:id, ts: Date.now() }));
         log('> CHARACTER_SELECT ' + id);
-        // Optimistic local UX (server will confirm)
         myCharId = id;
         markSelected(myCharId);
         enableReadyButton(true);
       }
 
       function applyCharacterPicked(playerIdPicked, charIdPicked){
-        if (playerIdPicked === playerId){
-          myCharId = charIdPicked;
-          showToast('Picked: ' + charIdPicked);
-          enableReadyButton(true);
-        }
+        if (playerIdPicked === playerId){ myCharId = charIdPicked; showToast('Picked: ' + charIdPicked); enableReadyButton(true); }
         takenChars.add(String(charIdPicked));
         markTaken([...takenChars]);
         markSelected(myCharId);
       }
 
-      // =========================
-      // Sending
-      // =========================
       function sendReady(){
         if(!ws) return;
         if (!myCharId){ showToast('Pick a character first'); return; }
@@ -266,9 +213,6 @@
         log('> PLAYER_READY');
       }
 
-      // =========================
-      // Join flow
-      // =========================
       $('btnJoin').onclick = async () => {
         roomId = $('room').value.trim().toUpperCase();
         const name = $('name').value.trim() || 'Player';
@@ -290,9 +234,7 @@
           $('joinCard').classList.add('hidden');
           setLobbyVisible(true);
           clearInterval(hbInterval);
-          hbInterval = setInterval(()=> {
-            try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {}
-          }, 5000);
+          hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
         };
 
         ws.onmessage = (ev) => {
@@ -304,9 +246,7 @@
 
             const s = msg.state || {};
             switch(s.type){
-              // --- Lobby states ---
               case 'CHARACTER_CATALOG':
-                // Expect entries: [{ id, label, portraitUrl? }]
                 renderCatalog(s.entries||[]);
                 break;
 
@@ -342,9 +282,7 @@
                 showToast('📣 ' + (s.message || 'Info'));
                 break;
             }
-          } catch(e) {
-            console.error(e);
-          }
+          } catch(e) { console.error(e); }
         };
 
         ws.onclose = () => {
@@ -353,10 +291,7 @@
           setLobbyVisible(false);
           $('joinCard').classList.remove('hidden');
           clearInterval(hbInterval);
-          myReady = false;
-          myCharId = null;
-          takenChars.clear();
-          knownCatalog = [];
+          myReady = false; myCharId = null; takenChars.clear(); knownCatalog = [];
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
