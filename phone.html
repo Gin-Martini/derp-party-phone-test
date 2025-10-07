@@ -37,18 +37,26 @@
       /* Character grid */
       #charGrid{display:none;margin:12px 0;gap:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
       .charBtn{
+        position:relative;
         display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
         padding:10px;border-radius:14px;background:#0f0f13;border:1px solid var(--border)
       }
-      .charBtn .portrait{
-        width:88px;height:88px;border-radius:14px;background:#0c0c10;display:flex;align-items:center;justify-content:center;
-        font-size:22px;color:#e5e7eb;border:1px solid #2a2a2f;background-size:cover;background-position:center;
+      .portrait{
+        width:88px;height:88px;border-radius:14px;background:#0c0c10;
+        display:flex;align-items:center;justify-content:center;
+        border:1px solid #2a2a2f;overflow:hidden;
+      }
+      .portrait img{
+        width:100%;height:100%;object-fit:cover;display:block;
+      }
+      .portrait .fallback{
+        font-size:22px;color:#e5e7eb;
       }
       .charBtn .name{font-size:14px;color:#e5e7eb}
       .charBtn.taken{opacity:.4;border-style:dashed}
       .charBtn.selected{outline:2px solid var(--accent);outline-offset:2px}
       .charBtn .badge{
-        position:absolute;transform:translate(32px,-40px);
+        position:absolute;right:8px;top:8px;
         background:#111;border:1px solid var(--border);color:#ddd;font-size:11px;border-radius:10px;padding:2px 6px
       }
     </style>
@@ -94,8 +102,6 @@
       // =========================
       const WS_URL    = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
-      // If server later includes portrait URLs in catalog (e.g. { id, label, portraitUrl })
-      const USE_PORTRAITS_IF_PROVIDED = true;
 
       // =========================
       // State
@@ -103,7 +109,7 @@
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
       let myCharId = null;
-      let knownCatalog = [];  // cache latest catalog (so taken updates can re-render)
+      let knownCatalog = [];  // [{id,label,portraitUrl}?]
       const takenChars = new Set();
 
       const $ = (id)=>document.getElementById(id);
@@ -150,31 +156,49 @@
         grid.innerHTML = '';
 
         knownCatalog.forEach(e=>{
-          // Button shell
-          const btn = document.createElement('button');
-          btn.className = 'charBtn';
-          btn.dataset.charId = e.id;
-          btn.setAttribute('type','button');
-          btn.onclick = () => onCharClicked(e.id);
+            const id = e.id;
+            const label = e.label || e.id;
+            const portraitUrl = e.portraitUrl || "";
 
-          // Portrait
-          const portrait = document.createElement('div');
-          portrait.className = 'portrait';
-          if (USE_PORTRAITS_IF_PROVIDED && e.portraitUrl) {
-            portrait.style.backgroundImage = `url('${e.portraitUrl}')`;
-          } else {
-            // Fallback: initials badge
-            portrait.textContent = (e.label||e.id||'?').slice(0,2).toUpperCase();
-          }
+            const btn = document.createElement('button');
+            btn.className = 'charBtn';
+            btn.dataset.charId = id;
+            btn.setAttribute('type','button');
+            btn.onclick = () => onCharClicked(id);
 
-          // Name
-          const name = document.createElement('div');
-          name.className = 'name';
-          name.textContent = e.label || e.id;
+            const portrait = document.createElement('div');
+            portrait.className = 'portrait';
 
-          btn.appendChild(portrait);
-          btn.appendChild(name);
-          grid.appendChild(btn);
+            if (portraitUrl){
+              const img = document.createElement('img');
+              img.loading = 'lazy';
+              img.decoding = 'async';
+              img.src = portraitUrl;
+
+              // If the image fails, swap to fallback initials
+              img.onerror = () => {
+                portrait.innerHTML = '';
+                const fb = document.createElement('div');
+                fb.className = 'fallback';
+                fb.textContent = label.slice(0,2).toUpperCase();
+                portrait.appendChild(fb);
+              };
+
+              portrait.appendChild(img);
+            } else {
+              const fb = document.createElement('div');
+              fb.className = 'fallback';
+              fb.textContent = label.slice(0,2).toUpperCase();
+              portrait.appendChild(fb);
+            }
+
+            const name = document.createElement('div');
+            name.className = 'name';
+            name.textContent = label;
+
+            btn.appendChild(portrait);
+            btn.appendChild(name);
+            grid.appendChild(btn);
         });
 
         markTaken([...takenChars]);
@@ -206,14 +230,13 @@
 
       function onCharClicked(id){
         if (!ws) return;
-        // allow reselecting your own to “confirm”
         if (takenChars.has(id) && id !== myCharId){
           showToast('That character is taken.');
           return;
         }
         ws.send(JSON.stringify({ type:'CHARACTER_SELECT', charId:id, ts: Date.now() }));
         log('> CHARACTER_SELECT ' + id);
-        // Optimistic local UX (server will confirm via CHARACTER_PICKED or mark taken)
+        // Optimistic local UX (server will confirm)
         myCharId = id;
         markSelected(myCharId);
         enableReadyButton(true);
@@ -236,7 +259,7 @@
       function sendReady(){
         if(!ws) return;
         if (!myCharId){ showToast('Pick a character first'); return; }
-        if (myReady) return; // guard multi-tap
+        if (myReady) return;
         myReady = true;
         setReadyPill(true);
         ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
@@ -283,7 +306,7 @@
             switch(s.type){
               // --- Lobby states ---
               case 'CHARACTER_CATALOG':
-                // Expect entries: [{ id, label, (optional) portraitUrl }]
+                // Expect entries: [{ id, label, portraitUrl? }]
                 renderCatalog(s.entries||[]);
                 break;
 
@@ -293,8 +316,6 @@
                   ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
                   : '—';
                 setStatus('Lobby: ' + text, true);
-
-                // mark taken from server
                 markTaken(s.taken||[]);
                 break;
               }
@@ -308,13 +329,8 @@
                 applyCharacterPicked(s.playerId, s.charId);
                 break;
 
-              case 'READY_OPEN':
-                showToast('Ready phase open');
-                break;
-
-              case 'READY_CLOSE':
-                showToast('Ready closed');
-                break;
+              case 'READY_OPEN':  showToast('Ready phase open'); break;
+              case 'READY_CLOSE': showToast('Ready closed'); break;
 
               case 'LOBBY_LOCKED':
                 setStatus('Game starting…', true);
@@ -322,7 +338,6 @@
                 $('lobbyArea').classList.add('hidden');
                 break;
 
-              // --- Fallback text messages (e.g., host disconnects) ---
               case 'TEXT':
                 showToast('📣 ' + (s.message || 'Info'));
                 break;
@@ -338,7 +353,6 @@
           setLobbyVisible(false);
           $('joinCard').classList.remove('hidden');
           clearInterval(hbInterval);
-          // reset local state
           myReady = false;
           myCharId = null;
           takenChars.clear();
