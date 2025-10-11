@@ -34,36 +34,36 @@
       .btn-accent{border-color:#155e75;background:#0e3a47}
       .btn-disabled{opacity:.6;pointer-events:none}
 
-/* Character grid */
-#charGrid{
-  display:none;              /* start hidden; reveal via JS after render */
-  margin:12px 0;
-  gap:12px;
-  grid-template-columns:repeat(3,minmax(0,1fr));
-}
-.charBtn{
-  position:relative;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-  padding:10px;border-radius:14px;background:#0f0f13;border:1px solid var(--border)
-}
-.portrait{
-  width:88px;height:88px;border-radius:14px;background:#0c0c10;
-  display:flex;align-items:center;justify-content:center;
-  border:1px solid #2a2a2f;overflow:hidden;
-}
-.portrait img{
-  width:100%;height:100%;
-  object-fit:contain;        /* avoid cropping edges of your cutouts */
-  display:block;
-}
-.portrait .fallback{ font-size:22px;color:#e5e7eb; }
-.charBtn .name{font-size:14px;color:#e5e7eb}
-.charBtn.taken{opacity:.4;border-style:dashed}
-.charBtn.selected{outline:2px solid var(--accent);outline-offset:2px}
-.charBtn .badge{
-  position:absolute;right:8px;top:8px;
-  background:#111;border:1px solid var(--border);color:#ddd;font-size:11px;border-radius:10px;padding:2px 6px
-}
+      /* Character grid */
+      #charGrid{
+        display:none;
+        margin:12px 0;
+        gap:12px;
+        grid-template-columns:repeat(3,minmax(0,1fr));
+      }
+      .charBtn{
+        position:relative;
+        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+        padding:10px;border-radius:14px;background:#0f0f13;border:1px solid var(--border)
+      }
+      .portrait{
+        width:88px;height:88px;border-radius:14px;background:#0c0c10;
+        display:flex;align-items:center;justify-content:center;
+        border:1px solid #2a2a2f;overflow:hidden;
+      }
+      .portrait img{
+        width:100%;height:100%;
+        object-fit:contain;
+        display:block;
+      }
+      .portrait .fallback{ font-size:22px;color:#e5e7eb; }
+      .charBtn .name{font-size:14px;color:#e5e7eb}
+      .charBtn.taken{opacity:.4;border-style:dashed}
+      .charBtn.selected{outline:2px solid var(--accent);outline-offset:2px}
+      .charBtn .badge{
+        position:absolute;right:8px;top:8px;
+        background:#111;border:1px solid var(--border);color:#ddd;font-size:11px;border-radius:10px;padding:2px 6px
+      }
     </style>
   </head>
   <body>
@@ -104,6 +104,7 @@
     <script>
       const WS_URL    = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
+      const DEBUG_LOG = true;                 // <— toggles on-screen log + extra prints
 
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
@@ -113,25 +114,31 @@
 
       const $ = (id)=>document.getElementById(id);
 
-      function log(x){ const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight; }
+      function log(x){ const el=$('log'); el.textContent += x + "\\n"; el.scrollTop = el.scrollHeight; }
       function showToast(text, ms=1600){ const t=$('toast'); t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
       function setStatus(text, pill=false){ const el=$('status'); el.textContent='Status: '+text; if(pill){el.classList.add('pill')}else{el.classList.remove('pill')} }
       function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
       function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
       function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
-
       function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
+
+      if (DEBUG_LOG) $('log').classList.remove('hidden');
 
       function renderCatalog(entries){
         knownCatalog = entries || [];
+        if (DEBUG_LOG) {
+          log(`[catalog] entries=${knownCatalog.length}`);
+        }
+
         const grid = $('charGrid');
         grid.innerHTML = '';
 
-        knownCatalog.forEach(e=>{
+        knownCatalog.forEach((e, i)=>{
           const id    = e.id;
           const label = e.label || e.id;
           const url   = e.portraitUrl || e.imageUrl || e.url || "";
           const data  = e.portraitData || e.portrait || "";
+          if (DEBUG_LOG) log(`  [${i}] id=${id} label=${label} urlLen=${url?.length||0} dataLen=${data?.length||0}`);
 
           const btn = document.createElement('button');
           btn.className = 'charBtn';
@@ -149,10 +156,12 @@
             img.decoding = 'async';
             img.src = src;
             img.onerror = () => {
+              if (DEBUG_LOG) log(`    ✖ img load failed for ${id}`);
               portrait.innerHTML='';
               const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
               portrait.appendChild(fb);
             };
+            img.onload = () => { if (DEBUG_LOG) log(`    ✓ img loaded for ${id}`); };
             portrait.appendChild(img);
           } else {
             const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
@@ -247,7 +256,7 @@
         };
 
         ws.onmessage = (ev) => {
-          log('< ' + ev.data);
+          if (DEBUG_LOG) log('< ' + ev.data);
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
@@ -311,4 +320,3 @@
     </script>
   </body>
 </html>
-
