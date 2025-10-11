@@ -104,7 +104,7 @@
     <script>
       const WS_URL    = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
-      const DEBUG_LOG = true;                 // <— toggles on-screen log + extra prints
+      const DEBUG_LOG = true; // show dev log + verbose prints
 
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
@@ -114,7 +114,7 @@
 
       const $ = (id)=>document.getElementById(id);
 
-      function log(x){ const el=$('log'); el.textContent += x + "\\n"; el.scrollTop = el.scrollHeight; }
+      function log(x){ const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight; }
       function showToast(text, ms=1600){ const t=$('toast'); t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
       function setStatus(text, pill=false){ const el=$('status'); el.textContent='Status: '+text; if(pill){el.classList.add('pill')}else{el.classList.remove('pill')} }
       function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
@@ -126,9 +126,7 @@
 
       function renderCatalog(entries){
         knownCatalog = entries || [];
-        if (DEBUG_LOG) {
-          log(`[catalog] entries=${knownCatalog.length}`);
-        }
+        if (DEBUG_LOG) log(`[catalog] entries=${knownCatalog.length}`);
 
         const grid = $('charGrid');
         grid.innerHTML = '';
@@ -181,6 +179,15 @@
         markSelected(myCharId);
         enableReadyButton(!!myCharId);
         ensureGridVisible();
+      }
+
+      function mergeCatalogPatch(patchEntries){
+        const byId = new Map((knownCatalog||[]).map(e=>[e.id,e]));
+        (patchEntries||[]).forEach(e=>{
+          const prev = byId.get(e.id) || { id:e.id };
+          byId.set(e.id, { ...prev, ...e });
+        });
+        renderCatalog([...byId.values()]);
       }
 
       function markTaken(list){
@@ -266,6 +273,10 @@
             switch(s.type){
               case 'CHARACTER_CATALOG':
                 renderCatalog(s.entries||[]);
+                break;
+
+              case 'CHARACTER_CATALOG_PATCH': // streamed/batched portraits
+                mergeCatalogPatch(s.entries||[]);
                 break;
 
               case 'LOBBY_STATE': {
