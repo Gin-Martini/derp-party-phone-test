@@ -40,39 +40,51 @@
 
       /* --- Character grid --- */
       #charGrid{
-        display:none;           /* revealed by JS after render */
+        display:none;
         margin:12px 0;
-        gap:18px 16px;
+        gap:22px 22px;
         grid-template-columns:repeat(3,minmax(0,1fr));
       }
-      /* Button is transparent – no tile box */
+
+      /* ZERO chrome around portraits: no bg, no border, no shadow, no focus ring */
       .charBtn{
         position:relative;
         display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-        padding:0;background:transparent;border:0;border-radius:0;
+        padding:0;margin:0;border:0;background:transparent;
+        outline:none;box-shadow:none;-webkit-tap-highlight-color:transparent;
       }
-      /* Portrait alone (no cropping) */
+      .charBtn:focus,.charBtn:focus-visible,.charBtn:active{outline:none;box-shadow:none}
+      .charBtn::before,.charBtn::after{content:none}
+
       .portrait{
         width:110px;height:110px;
         display:flex;align-items:center;justify-content:center;
-        background:transparent;border:0;border-radius:14px;overflow:visible;
+        background:transparent!important;border:0!important;border-radius:0!important;
+        box-shadow:none!important;outline:none!important;overflow:visible;
       }
       .portrait img{
         width:100%;height:100%;
-        object-fit:contain;   /* no crop */
-        display:block;border-radius:0;
+        object-fit:contain;                 /* show full art, no crop */
+        display:block;border:0!important;border-radius:0!important;
+        box-shadow:none!important;filter:none!important;background:transparent!important;
       }
       .portrait .fallback{ font-size:22px;color:#e5e7eb; }
+
       .charBtn .name{font-size:14px;color:#e5e7eb}
       .charBtn.taken{opacity:.45}
       .charBtn.selected .portrait{outline:2px solid var(--accent);outline-offset:2px}
+
+      /* Keep grid tidy on small phones */
+      @media (max-width:380px){
+        .portrait{width:96px;height:96px}
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <h3>Derp Party – Phone</h3>
 
-      <!-- Join (original clean layout) -->
+      <!-- Join (clean/original layout) -->
       <div class="card" id="joinCard">
         <label>Room Code</label>
         <input id="room" placeholder="e.g. ABC123" autocomplete="one-time-code">
