@@ -46,17 +46,24 @@
         display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
         padding:10px;border-radius:14px;background:#0f0f13;border:1px solid var(--border)
       }
+
+      /* ==== CHANGED: make portrait image stand alone (no inner frame) ==== */
       .portrait{
-        width:88px;height:88px;border-radius:14px;background:#0c0c10;
+        width:100px;height:100px;
+        border-radius:14px;
+        background:transparent;   /* no inner box */
+        border:0;                 /* remove inner border */
+        overflow:hidden;
         display:flex;align-items:center;justify-content:center;
-        border:1px solid #2a2a2f;overflow:hidden;
       }
       .portrait img{
         width:100%;height:100%;
-        object-fit:contain;
+        object-fit:cover;         /* fill the square nicely */
         display:block;
+        border-radius:14px;       /* keep rounded corners on the image itself */
       }
       .portrait .fallback{ font-size:22px;color:#e5e7eb; }
+
       .charBtn .name{font-size:14px;color:#e5e7eb}
       .charBtn.taken{opacity:.4;border-style:dashed}
       .charBtn.selected{outline:2px solid var(--accent);outline-offset:2px}
@@ -104,7 +111,6 @@
     <script>
       const WS_URL    = 'wss://relay.derpparty.xyz/socket';
       const HTTP_BASE = 'https://relay.derpparty.xyz';
-      const DEBUG_LOG = true; // show dev log + verbose prints
 
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
@@ -120,23 +126,19 @@
       function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
       function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
       function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
-      function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
 
-      if (DEBUG_LOG) $('log').classList.remove('hidden');
+      function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
 
       function renderCatalog(entries){
         knownCatalog = entries || [];
-        if (DEBUG_LOG) log(`[catalog] entries=${knownCatalog.length}`);
-
         const grid = $('charGrid');
         grid.innerHTML = '';
 
-        knownCatalog.forEach((e, i)=>{
+        knownCatalog.forEach(e=>{
           const id    = e.id;
           const label = e.label || e.id;
           const url   = e.portraitUrl || e.imageUrl || e.url || "";
           const data  = e.portraitData || e.portrait || "";
-          if (DEBUG_LOG) log(`  [${i}] id=${id} label=${label} urlLen=${url?.length||0} dataLen=${data?.length||0}`);
 
           const btn = document.createElement('button');
           btn.className = 'charBtn';
@@ -154,12 +156,10 @@
             img.decoding = 'async';
             img.src = src;
             img.onerror = () => {
-              if (DEBUG_LOG) log(`    ✖ img load failed for ${id}`);
               portrait.innerHTML='';
               const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
               portrait.appendChild(fb);
             };
-            img.onload = () => { if (DEBUG_LOG) log(`    ✓ img loaded for ${id}`); };
             portrait.appendChild(img);
           } else {
             const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
@@ -179,15 +179,6 @@
         markSelected(myCharId);
         enableReadyButton(!!myCharId);
         ensureGridVisible();
-      }
-
-      function mergeCatalogPatch(patchEntries){
-        const byId = new Map((knownCatalog||[]).map(e=>[e.id,e]));
-        (patchEntries||[]).forEach(e=>{
-          const prev = byId.get(e.id) || { id:e.id };
-          byId.set(e.id, { ...prev, ...e });
-        });
-        renderCatalog([...byId.values()]);
       }
 
       function markTaken(list){
@@ -263,7 +254,7 @@
         };
 
         ws.onmessage = (ev) => {
-          if (DEBUG_LOG) log('< ' + ev.data);
+          log('< ' + ev.data);
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
@@ -273,10 +264,6 @@
             switch(s.type){
               case 'CHARACTER_CATALOG':
                 renderCatalog(s.entries||[]);
-                break;
-
-              case 'CHARACTER_CATALOG_PATCH': // streamed/batched portraits
-                mergeCatalogPatch(s.entries||[]);
                 break;
 
               case 'LOBBY_STATE': {
