@@ -16,22 +16,18 @@
       body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
       .wrap{padding:16px;max-width:640px;margin:0 auto}
       h3{margin:10px 0 8px}
-
-      /* --- Clean join UI (original look) --- */
       label{display:block;margin:10px 0 6px;color:var(--muted);font-size:14px}
       input,button{font-size:16px;padding:12px;border-radius:12px;border:1px solid var(--border);background:#111115;color:var(--fg)}
       input{width:100%}
       .row{display:flex;gap:8px;flex-wrap:wrap}
       .row + .row{margin-top:10px}
       .card{background:var(--card);border-radius:16px;padding:12px;border:1px solid var(--border)}
-
-      /* Status / misc */
       #status{margin:12px 0 10px;padding:10px;border-radius:12px;background:#101014;border:1px solid #222;text-wrap:balance}
       #log{background:#0d0d10;color:#9ee5b2;padding:8px;height:160px;overflow:auto;border-radius:12px;border:1px solid #232326}
       #toast{
         position:fixed;left:50%;transform:translateX(-50%);bottom:24px;
         background:#222;color:#fff;padding:12px 16px;border-radius:12px;
-        box-shadow:0 8px 24px rgba(0,0,0,.45);display:none;max-width:90%;text-align:center;z-index:9999
+        box-shadow:0 8px 24px rgba(0,0,0,.45);display:none;max-width:90%;text-align:center;z-index:10000
       }
       .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:#17171b;border:1px solid var(--border);font-size:12px;color:#c7cad1}
       .pill.ok{border-color:#1d3c2c;color:#a4f3bd}
@@ -41,65 +37,44 @@
       .btn-accent{border-color:#155e75;background:#0e3a47}
       .btn-disabled{opacity:.6;pointer-events:none}
 
-      /* --- Character grid --- */
-      #charGrid{
-        display:none;
-        margin:12px 0;
-        gap:22px 22px;
-        grid-template-columns:repeat(3,minmax(0,1fr));
-      }
-
-      /* ZERO chrome around portraits: no bg, no border, no shadow, no focus ring */
-      .charBtn{
-        position:relative;
-        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-        padding:0;margin:0;border:0;background:transparent;
-        outline:none;box-shadow:none;-webkit-tap-highlight-color:transparent;
-      }
-      .charBtn:focus,.charBtn:focus-visible,.charBtn:active{outline:none;box-shadow:none}
-      .charBtn::before,.charBtn::after{content:none}
-
-      .portrait{
-        width:110px;height:110px;
-        display:flex;align-items:center;justify-content:center;
-        background:transparent!important;border:0!important;border-radius:0!important;
-        box-shadow:none!important;outline:none!important;overflow:visible;
-      }
-      .portrait img{
-        width:100%;height:100%;
-        object-fit:contain;
-        display:block;border:0!important;border-radius:0!important;
-        box-shadow:none!important;filter:none!important;background:transparent!important;
-      }
+      /* Character grid */
+      #charGrid{ display:none; margin:12px 0; gap:22px 22px; grid-template-columns:repeat(3,minmax(0,1fr)); }
+      .charBtn{ position:relative; display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+        padding:0;margin:0;border:0;background:transparent; outline:none;box-shadow:none;-webkit-tap-highlight-color:transparent;}
+      .charBtn:focus,.charBtn:active{outline:none;box-shadow:none}
+      .portrait{ width:110px;height:110px; display:flex;align-items:center;justify-content:center; background:transparent!important; }
+      .portrait img{ width:100%;height:100%; object-fit:contain; display:block; }
       .portrait .fallback{ font-size:22px;color:#e5e7eb; }
-
       .charBtn .name{font-size:14px;color:#e5e7eb}
       .charBtn.taken{opacity:.45}
       .charBtn.selected .portrait{outline:2px solid var(--accent);outline-offset:2px}
+      @media (max-width:380px){ .portrait{width:96px;height:96px} }
 
-      @media (max-width:380px){
-        .portrait{width:96px;height:96px}
-      }
-
-      /* TURN ORDER overlay: mobile-safe, handles notches, never off-screen */
+      /* TURN ORDER overlay: safe-area + highest z-index so it can't hide */
       #turnOrder{
         position:fixed;
         left:16px; right:16px;
         bottom:calc(12px + env(safe-area-inset-bottom, 0px));
-        z-index:9999;
+        z-index:10001;
         background:#141418;
         border:1px solid #2a2a32;
         border-radius:16px;
         padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
       }
+
+      /* Small debug strip to see last message type */
+      #dbg{
+        position:fixed; top:8px; right:8px; z-index:10002;
+        font:12px/1.2 system-ui, sans-serif; color:#cbd5e1; background:#0b0b0d; border:1px solid #282a36;
+        border-radius:10px; padding:6px 8px; opacity:.85;
+      }
     </style>
-    <script>console.log("DerpPhone v5");</script>
+    <script>console.log("DerpPhone v7");</script>
   </head>
   <body>
     <div class="wrap">
       <h3>Derp Party – Phone</h3>
 
-      <!-- Join (clean/original layout) -->
       <div class="card" id="joinCard">
         <label>Room Code</label>
         <input id="room" placeholder="e.g. ABC123" autocomplete="one-time-code">
@@ -107,6 +82,8 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary">Join Room</button>
+          <!-- Emergency: manual show for testing on devices -->
+          <button id="btnShowRoll" class="btn-accent">Show Roll UI</button>
         </div>
       </div>
 
@@ -142,6 +119,7 @@
 
       <pre id="log" class="hidden"></pre>
       <div id="toast"></div>
+      <div id="dbg">last: —</div>
     </div>
 
     <script>
@@ -156,6 +134,7 @@
       // turn-order client state
       let myHasRolled = false;
       const playerNameById = new Map(); // filled from TURN_ORDER_START
+      let startOverlayFallbackTO = null;
 
       const $ = (id)=>document.getElementById(id);
 
@@ -166,6 +145,7 @@
       function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
       function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
       function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
+      function setDbg(x){ const d=$('dbg'); if (d) d.textContent='last: ' + x; }
 
       function renderCatalog(entries){
         const grid = $('charGrid');
@@ -221,7 +201,6 @@
       function markTaken(list){
         takenChars.clear();
         (list||[]).forEach(id => takenChars.add(String(id)));
-
         [...$('charGrid').querySelectorAll('.charBtn')].forEach(b=>{
           const id = b.dataset.charId;
           const isTaken = takenChars.has(id);
@@ -275,10 +254,27 @@
             b.disabled = true;
             b.classList.add('btn-disabled');
             $('rollState').textContent = 'Rolling…';
+            setDbg('PLAYER_ROLL (sent)');
           } catch(e) {}
         }, { passive:true });
       }
       bindRollButton();
+
+      $('btnShowRoll').onclick = () => {
+        // Emergency client-side show for testing
+        const panel = $('turnOrder');
+        const btn   = $('btnRoll');
+        panel.classList.remove('hidden');
+        panel.style.display = 'block';
+        btn.disabled = false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
+        $('rollValue').textContent = '—';
+        $('orderResult').classList.add('hidden');
+        $('rollState').textContent = 'Waiting…';
+        $('rollState').classList.remove('ok'); $('rollState').classList.add('no');
+        bindRollButton();
+        setDbg('MANUAL SHOW');
+        showToast('🔧 Test overlay shown');
+      };
 
       $('btnJoin').onclick = async () => {
         roomId = ($('room').value||'').trim().toUpperCase();
@@ -302,49 +298,50 @@
           setLobbyVisible(true);
           clearInterval(hbInterval);
           hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
+
+          // Fallback: if no TURN_ORDER_START arrives within 5s after connection, show overlay anyway.
+          clearTimeout(startOverlayFallbackTO);
+          startOverlayFallbackTO = setTimeout(()=>{
+            const panel=$('turnOrder'), btn=$('btnRoll');
+            panel.classList.remove('hidden'); panel.style.display='block';
+            btn.disabled=false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
+            bindRollButton();
+            setDbg('FALLBACK SHOW');
+            showToast('⏱️ Waiting for host… you can still tap Roll');
+          }, 5000);
         };
 
-        // ===================== UPDATED DISPATCH (supports raw and STATE-wrapped) =====================
         ws.onmessage = (ev) => {
           log('< ' + ev.data);
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
 
-            // Normalize: handle raw messages and STATE-wrapped messages
             const innerState = (msg && msg.type === 'STATE' && msg.state) ? msg.state : null;
             const type = innerState ? innerState.type : msg.type;
             const payload = innerState || msg;
+            setDbg(type || 'unknown');
 
-            // TEXT passthrough (prove delivery)
-            if (type === 'TEXT' && payload.message) {
-              showToast(payload.message);
-            }
+            if (type === 'TEXT' && payload.message) showToast(payload.message);
 
-            // ---- Net Turn Order (phones drive the roll) ----
+            // ---- Turn Order flow ----
             if (type === 'TURN_ORDER_START') {
+              clearTimeout(startOverlayFallbackTO);
               playerNameById.clear();
               const arr = payload.players || [];
-              for (const p of arr) {
-                if (p && p.playerId) playerNameById.set(p.playerId, p.name || p.playerId);
-              }
+              for (const p of arr) if (p && p.playerId) playerNameById.set(p.playerId, p.name || p.playerId);
+
               myHasRolled = false;
               $('rollValue').textContent = '—';
               $('orderResult').classList.add('hidden');
               $('rollState').textContent = 'Waiting…';
               $('rollState').classList.remove('ok'); $('rollState').classList.add('no');
 
-              // HARD UNHIDE / ENABLE — handles mobile edge-cases
-              const panel = $('turnOrder');
-              const btn   = $('btnRoll');
-              panel.classList.remove('hidden');
-              panel.style.display = 'block';
-              btn.disabled = false;
-              btn.classList.remove('btn-disabled');
-              btn.style.display = 'inline-block';
-              bindRollButton();               // ensure bound (DOM can be re-created)
+              const panel = $('turnOrder'), btn=$('btnRoll');
+              panel.classList.remove('hidden'); panel.style.display='block';
+              btn.disabled = false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
+              bindRollButton();
               setTimeout(()=>window.scrollTo(0,0), 0);
-
               showToast('🎲 Roll for turn order!');
               return;
             }
@@ -355,9 +352,7 @@
                 $('rollValue').textContent = String(payload.roll);
                 $('rollState').textContent = 'Rolled';
                 $('rollState').classList.add('ok'); $('rollState').classList.remove('no');
-                const btn = $('btnRoll');
-                btn.disabled = true;
-                btn.classList.add('btn-disabled');
+                const btn = $('btnRoll'); btn.disabled = true; btn.classList.add('btn-disabled');
               }
               return;
             }
@@ -377,7 +372,7 @@
               return;
             }
 
-            // ---- Existing STATE messages (legacy flow) ----
+            // ---- Legacy Lobby STATE messages ----
             if (msg.type !== 'STATE') return;
             const s = msg.state || {};
 
@@ -387,7 +382,7 @@
                 break;
 
               case 'LOBBY_STATE': {
-                const players = s.players||([]);
+                const players = s.players||[];
                 const text = players.length
                   ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
                   : '—';
@@ -420,7 +415,6 @@
             }
           } catch(e) { console.error(e); }
         };
-        // =====================================================================
 
         ws.onclose = () => {
           log('WS closed.');
@@ -428,12 +422,14 @@
           setLobbyVisible(false);
           $('joinCard').classList.remove('hidden');
           clearInterval(hbInterval);
+          clearTimeout(startOverlayFallbackTO);
           myReady = false; myCharId = null; takenChars.clear();
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
           const panel = $('turnOrder');
-          if (panel) panel.classList.add('hidden');
+          if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
+          setDbg('WS closed');
         };
       };
 
