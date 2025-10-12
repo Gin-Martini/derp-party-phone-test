@@ -12,20 +12,9 @@
       *{box-sizing:border-box}
       body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
       .wrap{padding:16px;max-width:640px;margin:0 auto}
-      h3{margin:10px 0 8px}
-      label{display:block;margin:10px 0 6px;color:var(--muted);font-size:14px}
-      input,button{font-size:16px;padding:12px;border-radius:12px;border:1px solid var(--border);background:#111115;color:var(--fg)}
-      input{width:100%}
       .row{display:flex;gap:8px;flex-wrap:wrap}
-      .row + .row{margin-top:10px}
       .card{background:var(--card);border-radius:16px;padding:12px;border:1px solid var(--border)}
-      #status{margin:12px 0 10px;padding:10px;border-radius:12px;background:#101014;border:1px solid #222;text-wrap:balance}
-      #log{background:#0d0d10;color:#9ee5b2;padding:8px;height:160px;overflow:auto;border-radius:12px;border:1px solid #232326}
-      #toast{
-        position:fixed;left:50%;transform:translateX(-50%);bottom:24px;
-        background:#222;color:#fff;padding:12px 16px;border-radius:12px;
-        box-shadow:0 8px 24px rgba(0,0,0,.45);display:none;max-width:90%;text-align:center;z-index:9999
-      }
+      #status{margin:12px 0 10px;padding:10px;border-radius:12px;background:#101014;border:1px solid #222}
       .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:#17171b;border:1px solid var(--border);font-size:12px;color:#c7cad1}
       .pill.ok{border-color:#1d3c2c;color:#a4f3bd}
       .pill.no{border-color:#3c1d1d;color:#f9bebe}
@@ -38,35 +27,45 @@
       #charGrid{
         display:none;
         margin:12px 0;
-        gap:12px;
+        gap:18px 16px;
         grid-template-columns:repeat(3,minmax(0,1fr));
       }
+
+      /* --- CHANGED: button is now transparent; no box around item --- */
       .charBtn{
         position:relative;
-        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
-        padding:10px;border-radius:14px;background:#0f0f13;border:1px solid var(--border)
+        display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;
+        padding:0;                      /* was 10px */
+        background:transparent;         /* REMOVE dark tile */
+        border:0;                       /* REMOVE border */
+        border-radius:0;                /* no rounding on container */
       }
 
-      /* ==== CHANGED: make portrait image stand alone (no inner frame) ==== */
+      /* Portrait stands alone */
       .portrait{
-        width:100px;height:100px;
+        width:104px;height:104px;
         border-radius:14px;
-        background:transparent;   /* no inner box */
-        border:0;                 /* remove inner border */
+        background:transparent;
+        border:0;
         overflow:hidden;
         display:flex;align-items:center;justify-content:center;
       }
       .portrait img{
         width:100%;height:100%;
-        object-fit:cover;         /* fill the square nicely */
+        object-fit:cover;
         display:block;
-        border-radius:14px;       /* keep rounded corners on the image itself */
+        border-radius:14px;
       }
+
       .portrait .fallback{ font-size:22px;color:#e5e7eb; }
 
       .charBtn .name{font-size:14px;color:#e5e7eb}
-      .charBtn.taken{opacity:.4;border-style:dashed}
-      .charBtn.selected{outline:2px solid var(--accent);outline-offset:2px}
+
+      /* --- CHANGED: apply selection outline to the image instead of the button --- */
+      .charBtn.selected .portrait{ outline:2px solid var(--accent); outline-offset:2px }
+
+      /* Keep the taken/disabled cues */
+      .charBtn.taken{opacity:.45}
       .charBtn .badge{
         position:absolute;right:8px;top:8px;
         background:#111;border:1px solid var(--border);color:#ddd;font-size:11px;border-radius:10px;padding:2px 6px
@@ -80,10 +79,8 @@
       <div class="card" id="joinCard">
         <label>Room Code</label>
         <input id="room" placeholder="e.g. ABC123">
-
         <label>Name</label>
         <input id="name" placeholder="Your name" value="Player">
-
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary">Join Room</button>
         </div>
@@ -109,212 +106,142 @@
     </div>
 
     <script>
-      const WS_URL    = 'wss://relay.derpparty.xyz/socket';
-      const HTTP_BASE = 'https://relay.derpparty.xyz';
-
+      const WS_URL='wss://relay.derpparty.xyz/socket';
+      const HTTP_BASE='https://relay.derpparty.xyz';
       let ws, playerId, roomId, hbInterval;
-      let myReady = false;
-      let myCharId = null;
-      let knownCatalog = [];
-      const takenChars = new Set();
+      let myReady=false, myCharId=null;
+      const takenChars=new Set();
+      const $=id=>document.getElementById(id);
 
-      const $ = (id)=>document.getElementById(id);
-
-      function log(x){ const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight; }
-      function showToast(text, ms=1600){ const t=$('toast'); t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
-      function setStatus(text, pill=false){ const el=$('status'); el.textContent='Status: '+text; if(pill){el.classList.add('pill')}else{el.classList.remove('pill')} }
-      function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
-      function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
-      function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
-
-      function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
+      function log(x){const el=$('log');el.textContent+=x+"\n";el.scrollTop=el.scrollHeight;}
+      function showToast(t,ms=1600){const el=$('toast');el.textContent=t;el.style.display='block';clearTimeout(showToast._to);showToast._to=setTimeout(()=>el.style.display='none',ms);}
+      function setStatus(t,p=false){const el=$('status');el.textContent='Status: '+t;el.classList.toggle('pill',p);}
+      function setLobbyVisible(on){$('lobbyArea').classList.toggle('hidden',!on);}
+      function setReadyPill(on){const p=$('readyPill');p.textContent=on?'Ready':'Not Ready';p.classList.toggle('ok',on);p.classList.toggle('no',!on);}
+      function enableReadyButton(can){const b=$('btnReady');b.disabled=!can;b.classList.toggle('btn-disabled',!can);}
+      function ensureGridVisible(){const g=$('charGrid');g.style.display='grid';return g;}
 
       function renderCatalog(entries){
-        knownCatalog = entries || [];
-        const grid = $('charGrid');
-        grid.innerHTML = '';
+        const grid=$('charGrid');grid.innerHTML='';
+        (entries||[]).forEach(e=>{
+          const id=e.id, label=e.label||e.id;
+          const url=e.portraitUrl||e.imageUrl||e.url||"";
+          const data=e.portraitData||e.portrait||"";
 
-        knownCatalog.forEach(e=>{
-          const id    = e.id;
-          const label = e.label || e.id;
-          const url   = e.portraitUrl || e.imageUrl || e.url || "";
-          const data  = e.portraitData || e.portrait || "";
+          const btn=document.createElement('button');
+          btn.className='charBtn'; btn.dataset.charId=id; btn.type='button';
+          btn.onclick=()=>onCharClicked(id);
 
-          const btn = document.createElement('button');
-          btn.className = 'charBtn';
-          btn.dataset.charId = id;
-          btn.type = 'button';
-          btn.onclick = () => onCharClicked(id);
-
-          const portrait = document.createElement('div');
-          portrait.className = 'portrait';
-
-          const src = url || data;
-          if (src){
-            const img = document.createElement('img');
-            img.loading = 'lazy';
-            img.decoding = 'async';
-            img.src = src;
-            img.onerror = () => {
-              portrait.innerHTML='';
-              const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
-              portrait.appendChild(fb);
-            };
+          const portrait=document.createElement('div'); portrait.className='portrait';
+          const src=url||data;
+          if(src){
+            const img=document.createElement('img');
+            img.loading='lazy'; img.decoding='async'; img.src=src;
+            img.onerror=()=>{portrait.innerHTML='';const fb=document.createElement('div');fb.className='fallback';fb.textContent=label.slice(0,2).toUpperCase();portrait.appendChild(fb);};
             portrait.appendChild(img);
-          } else {
-            const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
-            portrait.appendChild(fb);
+          }else{
+            const fb=document.createElement('div');fb.className='fallback';fb.textContent=label.slice(0,2).toUpperCase();portrait.appendChild(fb);
           }
 
-          const name = document.createElement('div');
-          name.className = 'name';
-          name.textContent = label;
+          const name=document.createElement('div'); name.className='name'; name.textContent=label;
 
           btn.appendChild(portrait);
           btn.appendChild(name);
           grid.appendChild(btn);
         });
 
-        markTaken([...takenChars]);
+        markTaken([]);
         markSelected(myCharId);
         enableReadyButton(!!myCharId);
         ensureGridVisible();
       }
 
       function markTaken(list){
-        takenChars.clear();
-        (list||[]).forEach(id => takenChars.add(String(id)));
-
-        const grid = $('charGrid');
-        [...grid.querySelectorAll('.charBtn')].forEach(b=>{
-          const id = b.dataset.charId;
-          const isTaken = takenChars.has(id);
-          const isMine  = (id === myCharId);
+        takenChars.clear(); (list||[]).forEach(id=>takenChars.add(String(id)));
+        [...$('charGrid').querySelectorAll('.charBtn')].forEach(b=>{
+          const id=b.dataset.charId; const isTaken=takenChars.has(id); const isMine=(id===myCharId);
           b.classList.toggle('taken', isTaken && !isMine);
-          b.disabled = isTaken && !isMine;
+          b.disabled=isTaken && !isMine;
         });
       }
-
       function markSelected(id){
-        const grid = $('charGrid');
-        [...grid.querySelectorAll('.charBtn')].forEach(b=>{
-          b.classList.toggle('selected', b.dataset.charId === id);
+        [...$('charGrid').querySelectorAll('.charBtn')].forEach(b=>{
+          b.classList.toggle('selected', b.dataset.charId===id);
         });
       }
 
       function onCharClicked(id){
-        if (!ws) return;
-        if (takenChars.has(id) && id !== myCharId){ showToast('That character is taken.'); return; }
-        ws.send(JSON.stringify({ type:'CHARACTER_SELECT', charId:id, ts: Date.now() }));
-        log('> CHARACTER_SELECT ' + id);
-        myCharId = id;
-        markSelected(myCharId);
-        enableReadyButton(true);
+        if(!ws) return;
+        if(takenChars.has(id) && id!==myCharId){showToast('That character is taken.');return;}
+        ws.send(JSON.stringify({type:'CHARACTER_SELECT',charId:id,ts:Date.now()}));
+        log('> CHARACTER_SELECT '+id);
+        myCharId=id; markSelected(myCharId); enableReadyButton(true);
       }
 
-      function applyCharacterPicked(playerIdPicked, charIdPicked){
-        if (playerIdPicked === playerId){ myCharId = charIdPicked; showToast('Picked: ' + charIdPicked); enableReadyButton(true); }
-        takenChars.add(String(charIdPicked));
-        markTaken([...takenChars]);
-        markSelected(myCharId);
+      function applyCharacterPicked(pid, cid){
+        if(pid===playerId){ myCharId=cid; showToast('Picked: '+cid); enableReadyButton(true); }
+        takenChars.add(String(cid)); markTaken([...takenChars]); markSelected(myCharId);
       }
 
       function sendReady(){
-        if(!ws) return;
-        if (!myCharId){ showToast('Pick a character first'); return; }
-        if (myReady) return;
-        myReady = true;
-        setReadyPill(true);
-        ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
-        log('> PLAYER_READY');
+        if(!ws) return; if(!myCharId){showToast('Pick a character first');return;}
+        if(myReady) return; myReady=true; setReadyPill(true);
+        ws.send(JSON.stringify({type:'PLAYER_READY',ts:Date.now()})); log('> PLAYER_READY');
       }
 
-      $('btnJoin').onclick = async () => {
-        roomId = $('room').value.trim().toUpperCase();
-        const name = $('name').value.trim() || 'Player';
-        if(!roomId){ alert('Enter room code.'); return; }
-
+      $('btnJoin').onclick=async ()=>{
+        roomId=$('room').value.trim().toUpperCase();
+        const name=$('name').value.trim()||'Player';
+        if(!roomId){alert('Enter room code.');return;}
         try{
-          const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, { method:'POST' });
-          if(!resp.ok){ log('Join HTTP failed: ' + resp.status); setStatus('Join failed'); return; }
-          const j = await resp.json();
-          playerId = j.playerId;
-          log('Got playerId: ' + playerId);
-        }catch(e){ log('HTTP error: ' + e); setStatus('HTTP error'); return; }
+          const resp=await fetch(`${HTTP_BASE}/rooms/${roomId}/join`,{method:'POST'});
+          if(!resp.ok){log('Join HTTP failed: '+resp.status); setStatus('Join failed'); return;}
+          const j=await resp.json(); playerId=j.playerId; log('Got playerId: '+playerId);
+        }catch(e){log('HTTP error: '+e); setStatus('HTTP error'); return;}
 
-        ws = new WebSocket(WS_URL);
-        ws.onopen = () => {
+        ws=new WebSocket(WS_URL);
+        ws.onopen=()=>{
           log('WS open.');
-          ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
+          ws.send(JSON.stringify({type:'HELLO_PLAYER',roomId,playerId,name}));
           setStatus('Connected. In Lobby.', true);
-          $('joinCard').classList.add('hidden');
-          setLobbyVisible(true);
+          $('joinCard').classList.add('hidden'); setLobbyVisible(true);
           clearInterval(hbInterval);
-          hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
+          hbInterval=setInterval(()=>{try{ws.readyState===1&&ws.send(JSON.stringify({type:'PING'}));}catch(_){}},5000);
         };
 
-        ws.onmessage = (ev) => {
-          log('< ' + ev.data);
-          try {
-            const msg = JSON.parse(ev.data);
-            if (msg.type === 'PONG') return;
-            if (msg.type !== 'STATE') return;
-
-            const s = msg.state || {};
+        ws.onmessage=(ev)=>{
+          log('< '+ev.data);
+          try{
+            const msg=JSON.parse(ev.data);
+            if(msg.type==='PONG')return;
+            if(msg.type!=='STATE')return;
+            const s=msg.state||{};
             switch(s.type){
-              case 'CHARACTER_CATALOG':
-                renderCatalog(s.entries||[]);
-                break;
-
+              case 'CHARACTER_CATALOG': renderCatalog(s.entries||[]); break;
               case 'LOBBY_STATE': {
-                const players = s.players||[];
-                const text = players.length
-                  ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
-                  : '—';
-                setStatus('Lobby: ' + text, true);
-                markTaken(s.taken||[]);
-                break;
+                const players=s.players||[];
+                const text=players.length?players.map(p=>`${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', '):'—';
+                setStatus('Lobby: '+text, true);
+                markTaken(s.taken||[]); break;
               }
-
-              case 'CHARACTER_TAKEN':
-                takenChars.add(String(s.charId));
-                markTaken([...takenChars]);
-                break;
-
-              case 'CHARACTER_PICKED':
-                applyCharacterPicked(s.playerId, s.charId);
-                break;
-
-              case 'READY_OPEN':  showToast('Ready phase open'); break;
+              case 'CHARACTER_TAKEN': takenChars.add(String(s.charId)); markTaken([...takenChars]); break;
+              case 'CHARACTER_PICKED': applyCharacterPicked(s.playerId,s.charId); break;
+              case 'READY_OPEN': showToast('Ready phase open'); break;
               case 'READY_CLOSE': showToast('Ready closed'); break;
-
-              case 'LOBBY_LOCKED':
-                setStatus('Game starting…', true);
-                setReadyPill(false);
-                $('lobbyArea').classList.add('hidden');
-                break;
-
-              case 'TEXT':
-                showToast('📣 ' + (s.message || 'Info'));
-                break;
+              case 'LOBBY_LOCKED': setStatus('Game starting…', true); setReadyPill(false); $('lobbyArea').classList.add('hidden'); break;
+              case 'TEXT': showToast('📣 '+(s.message||'Info')); break;
             }
-          } catch(e) { console.error(e); }
+          }catch(e){console.error(e);}
         };
 
-        ws.onclose = () => {
-          log('WS closed.');
-          setStatus('Disconnected');
-          setLobbyVisible(false);
-          $('joinCard').classList.remove('hidden');
-          clearInterval(hbInterval);
-          myReady = false; myCharId = null; takenChars.clear(); knownCatalog = [];
-          $('charGrid').innerHTML = '';
-          enableReadyButton(false);
-          setReadyPill(false);
+        ws.onclose=()=>{
+          log('WS closed.'); setStatus('Disconnected'); setLobbyVisible(false); $('joinCard').classList.remove('hidden');
+          clearInterval(hbInterval); myReady=false; myCharId=null; takenChars.clear(); $('charGrid').innerHTML='';
+          enableReadyButton(false); setReadyPill(false);
         };
       };
 
-      $('btnReady').onclick = sendReady;
+      $('btnReady').onclick=sendReady;
     </script>
   </body>
 </html>
