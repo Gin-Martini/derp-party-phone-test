@@ -2,6 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Derp Party – Phone (Lobby)</title>
     <style>
@@ -77,7 +80,20 @@
       @media (max-width:380px){
         .portrait{width:96px;height:96px}
       }
+
+      /* TURN ORDER overlay: mobile-safe, handles notches, never off-screen */
+      #turnOrder{
+        position:fixed;
+        left:16px; right:16px;
+        bottom:calc(12px + env(safe-area-inset-bottom, 0px));
+        z-index:9999;
+        background:#141418;
+        border:1px solid #2a2a32;
+        border-radius:16px;
+        padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
+      }
     </style>
+    <script>console.log("DerpPhone v5");</script>
   </head>
   <body>
     <div class="wrap">
@@ -110,7 +126,7 @@
       </div>
 
       <!-- TURN ORDER OVERLAY -->
-      <div id="turnOrder" class="card hidden" style="position:fixed;inset:auto 16px 20px 16px;z-index:50;background:#141418;border:1px solid #2a2a32">
+      <div id="turnOrder" class="card hidden">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
           <div class="pill">Roll for Turn Order</div>
           <div id="rollState" class="pill no">Waiting…</div>
@@ -248,6 +264,22 @@
         log('> PLAYER_READY');
       }
 
+      function bindRollButton(){
+        const b = $('btnRoll');
+        if (!b || b._derpBound) return;
+        b._derpBound = true;
+        b.addEventListener('click', () => {
+          if (!ws || myHasRolled) return;
+          try {
+            ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));
+            b.disabled = true;
+            b.classList.add('btn-disabled');
+            $('rollState').textContent = 'Rolling…';
+          } catch(e) {}
+        }, { passive:true });
+      }
+      bindRollButton();
+
       $('btnJoin').onclick = async () => {
         roomId = ($('room').value||'').trim().toUpperCase();
         const name = ($('name').value||'').trim() || 'Player';
@@ -284,6 +316,11 @@
             const type = innerState ? innerState.type : msg.type;
             const payload = innerState || msg;
 
+            // TEXT passthrough (prove delivery)
+            if (type === 'TEXT' && payload.message) {
+              showToast(payload.message);
+            }
+
             // ---- Net Turn Order (phones drive the roll) ----
             if (type === 'TURN_ORDER_START') {
               playerNameById.clear();
@@ -296,9 +333,19 @@
               $('orderResult').classList.add('hidden');
               $('rollState').textContent = 'Waiting…';
               $('rollState').classList.remove('ok'); $('rollState').classList.add('no');
-              $('btnRoll').disabled = false;
-              $('btnRoll').classList.remove('btn-disabled');
-              $('turnOrder').classList.remove('hidden');
+
+              // HARD UNHIDE / ENABLE — handles mobile edge-cases
+              const panel = $('turnOrder');
+              const btn   = $('btnRoll');
+              panel.classList.remove('hidden');
+              panel.style.display = 'block';
+              btn.disabled = false;
+              btn.classList.remove('btn-disabled');
+              btn.style.display = 'inline-block';
+              bindRollButton();               // ensure bound (DOM can be re-created)
+              setTimeout(()=>window.scrollTo(0,0), 0);
+
+              showToast('🎲 Roll for turn order!');
               return;
             }
 
@@ -308,8 +355,9 @@
                 $('rollValue').textContent = String(payload.roll);
                 $('rollState').textContent = 'Rolled';
                 $('rollState').classList.add('ok'); $('rollState').classList.remove('no');
-                $('btnRoll').disabled = true;
-                $('btnRoll').classList.add('btn-disabled');
+                const btn = $('btnRoll');
+                btn.disabled = true;
+                btn.classList.add('btn-disabled');
               }
               return;
             }
@@ -339,7 +387,7 @@
                 break;
 
               case 'LOBBY_STATE': {
-                const players = s.players||[];
+                const players = s.players||([]);
                 const text = players.length
                   ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
                   : '—';
@@ -384,26 +432,12 @@
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
-          $('turnOrder').classList.add('hidden'); // also hide any lingering turn-order UI
+          const panel = $('turnOrder');
+          if (panel) panel.classList.add('hidden');
         };
       };
 
       $('btnReady').onclick = sendReady;
-
-      // turn-order roll button
-      (function bindRoll(){
-        const b = $('btnRoll');
-        if (!b) return;
-        b.onclick = () => {
-          if (!ws || myHasRolled) return;
-          try {
-            ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));
-            b.disabled = true;
-            b.classList.add('btn-disabled');
-            $('rollState').textContent = 'Rolling…';
-          } catch(e) {}
-        };
-      })();
     </script>
   </body>
 </html>
