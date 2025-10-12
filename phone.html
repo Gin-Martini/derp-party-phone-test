@@ -272,17 +272,22 @@
           hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
         };
 
+        // ===================== UPDATED DISPATCH (supports raw and STATE-wrapped) =====================
         ws.onmessage = (ev) => {
           log('< ' + ev.data);
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
 
+            // Normalize: handle raw messages and STATE-wrapped messages
+            const innerState = (msg && msg.type === 'STATE' && msg.state) ? msg.state : null;
+            const type = innerState ? innerState.type : msg.type;
+            const payload = innerState || msg;
+
             // ---- Net Turn Order (phones drive the roll) ----
-            if (msg.type === 'TURN_ORDER_START') {
-              // store id->name mapping for pretty results
+            if (type === 'TURN_ORDER_START') {
               playerNameById.clear();
-              const arr = msg.players || [];
+              const arr = payload.players || [];
               for (const p of arr) {
                 if (p && p.playerId) playerNameById.set(p.playerId, p.name || p.playerId);
               }
@@ -297,10 +302,10 @@
               return;
             }
 
-            if (msg.type === 'TURN_ORDER_FEEDBACK') {
-              if (msg.playerId === playerId) {
+            if (type === 'TURN_ORDER_FEEDBACK') {
+              if (payload.playerId === playerId) {
                 myHasRolled = true;
-                $('rollValue').textContent = String(msg.roll);
+                $('rollValue').textContent = String(payload.roll);
                 $('rollState').textContent = 'Rolled';
                 $('rollState').classList.add('ok'); $('rollState').classList.remove('no');
                 $('btnRoll').disabled = true;
@@ -309,12 +314,12 @@
               return;
             }
 
-            if (msg.type === 'TURN_ORDER_DONE') {
-              const r = msg.ordered || [];
+            if (type === 'TURN_ORDER_DONE') {
+              const r = payload.ordered || [];
               const lines = r.map((pid,i) => {
                 const name = playerNameById.get(pid) || pid;
                 const me = (pid === playerId) ? ' (you)' : '';
-                const roll = (msg.rolls && msg.rolls[pid] != null) ? ` — ${msg.rolls[pid]}` : '';
+                const roll = (payload.rolls && payload.rolls[pid] != null) ? ` — ${payload.rolls[pid]}` : '';
                 return `${i+1}. ${name}${me}${roll}`;
               }).join('<br/>');
               const box = $('orderResult');
@@ -324,10 +329,10 @@
               return;
             }
 
-            // ---- Existing STATE messages ----
+            // ---- Existing STATE messages (legacy flow) ----
             if (msg.type !== 'STATE') return;
-
             const s = msg.state || {};
+
             switch(s.type){
               case 'CHARACTER_CATALOG':
                 renderCatalog(s.entries||[]);
@@ -367,6 +372,7 @@
             }
           } catch(e) { console.error(e); }
         };
+        // =====================================================================
 
         ws.onclose = () => {
           log('WS closed.');
@@ -378,9 +384,7 @@
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
-
-          // also hide any lingering turn-order UI
-          $('turnOrder').classList.add('hidden');
+          $('turnOrder').classList.add('hidden'); // also hide any lingering turn-order UI
         };
       };
 
