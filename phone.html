@@ -50,7 +50,7 @@
       .charBtn.selected .portrait{outline:2px solid var(--accent);outline-offset:2px}
       @media (max-width:380px){ .portrait{width:96px;height:96px} }
 
-      /* TURN ORDER overlay: safe-area + highest z-index so it can't hide */
+      /* TURN ORDER overlay */
       #turnOrder{
         position:fixed;
         left:16px; right:16px;
@@ -62,14 +62,14 @@
         padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
       }
 
-      /* Small debug strip to see last message type */
+      /* Small debug strip */
       #dbg{
         position:fixed; top:8px; right:8px; z-index:10002;
         font:12px/1.2 system-ui, sans-serif; color:#cbd5e1; background:#0b0b0d; border:1px solid #282a36;
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7");</script>
+    <script>console.log("DerpPhone v7.1");</script>
   </head>
   <body>
     <div class="wrap">
@@ -123,8 +123,10 @@
     </div>
 
     <script>
-      const WS_URL    = 'wss://relay.derpparty.xyz/socket';
-      const HTTP_BASE = 'https://relay.derpparty.xyz';
+      // ==== UPDATED HOSTS ====
+      const BASE      = 'https://derpparty-relay.fly.dev';
+      const HTTP_BASE = BASE;
+      const WS_URL    = BASE.replace('https','wss') + '/socket';
 
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
@@ -261,7 +263,6 @@
       bindRollButton();
 
       $('btnShowRoll').onclick = () => {
-        // Emergency client-side show for testing
         const panel = $('turnOrder');
         const btn   = $('btnRoll');
         panel.classList.remove('hidden');
@@ -283,11 +284,20 @@
 
         try{
           const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, { method:'POST' });
-          if(!resp.ok){ log('Join HTTP failed: ' + resp.status); setStatus('Join failed'); return; }
+          if(!resp.ok){
+            const txt = await resp.text().catch(()=>'<no body>');
+            console.log('Join failed:', resp.status, txt);
+            setStatus(`Join failed: ${resp.status}`);
+            return;
+          }
           const j = await resp.json();
           playerId = j.playerId;
           log('Got playerId: ' + playerId);
-        }catch(e){ log('HTTP error: ' + e); setStatus('HTTP error'); return; }
+        }catch(e){
+          console.log('HTTP error:', e);
+          setStatus('HTTP error');
+          return;
+        }
 
         ws = new WebSocket(WS_URL);
         ws.onopen = () => {
@@ -299,7 +309,6 @@
           clearInterval(hbInterval);
           hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
 
-          // Fallback: if no TURN_ORDER_START arrives within 5s after connection, show overlay anyway.
           clearTimeout(startOverlayFallbackTO);
           startOverlayFallbackTO = setTimeout(()=>{
             const panel=$('turnOrder'), btn=$('btnRoll');
