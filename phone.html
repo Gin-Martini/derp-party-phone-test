@@ -50,7 +50,7 @@
       .charBtn.selected .portrait{outline:2px solid var(--accent);outline-offset:2px}
       @media (max-width:380px){ .portrait{width:96px;height:96px} }
 
-      /* TURN ORDER overlay: safe-area + highest z-index so it can't hide */
+      /* TURN ORDER overlay */
       #turnOrder{
         position:fixed;
         left:16px; right:16px;
@@ -62,14 +62,14 @@
         padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
       }
 
-      /* Small debug strip to see last message type */
+      /* Small debug strip */
       #dbg{
         position:fixed; top:8px; right:8px; z-index:10002;
         font:12px/1.2 system-ui, sans-serif; color:#cbd5e1; background:#0b0b0d; border:1px solid #282a36;
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.2 – host swap only");</script>
+    <script>console.log("DerpPhone v7.3 – host swap + direct catalog support");</script>
   </head>
   <body>
     <div class="wrap">
@@ -82,7 +82,6 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary">Join Room</button>
-          <!-- Emergency: manual show for testing on devices -->
           <button id="btnShowRoll" class="btn-accent">Show Roll UI</button>
         </div>
       </div>
@@ -123,7 +122,7 @@
     </div>
 
     <script>
-      // ==== ONLY CHANGE: use Fly host for HTTP + WS ====
+      // ==== HOSTS ====
       const BASE      = 'https://derpparty-relay.fly.dev';
       const HTTP_BASE = BASE;
       const WS_URL    = BASE.replace('https','wss') + '/socket';
@@ -135,7 +134,7 @@
 
       // turn-order client state
       let myHasRolled = false;
-      const playerNameById = new Map(); // filled from TURN_ORDER_START
+      const playerNameById = new Map();
       let startOverlayFallbackTO = null;
 
       const $ = (id)=>document.getElementById(id);
@@ -263,10 +262,10 @@
       bindRollButton();
 
       $('btnShowRoll').onclick = () => {
-        // Emergency client-side show for testing
         const panel = $('turnOrder');
         const btn   = $('btnRoll');
         panel.classList.remove('hidden');
+        panel.classList.add('force-show');
         panel.style.display = 'block';
         btn.disabled = false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
         $('rollValue').textContent = '—';
@@ -307,10 +306,11 @@
           setStatus('Connected. In Lobby.', true);
           $('joinCard').classList.add('hidden');
           setLobbyVisible(true);
+          ensureGridVisible();                   /* NEW: show grid immediately */
+
           clearInterval(hbInterval);
           hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
 
-          // Fallback: if no TURN_ORDER_START arrives within 5s after connection, show overlay anyway.
           clearTimeout(startOverlayFallbackTO);
           startOverlayFallbackTO = setTimeout(()=>{
             const panel=$('turnOrder'), btn=$('btnRoll');
@@ -327,6 +327,12 @@
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
+
+            /* NEW: if server sends CHARACTER_CATALOG directly, render it */
+            if (msg.type === 'CHARACTER_CATALOG') {
+              renderCatalog(msg.entries || msg.list || msg.characters || []);
+              return;
+            }
 
             const innerState = (msg && msg.type === 'STATE' && msg.state) ? msg.state : null;
             const type = innerState ? innerState.type : msg.type;
