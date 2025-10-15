@@ -69,7 +69,7 @@
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.3 – host swap + direct catalog support");</script>
+    <script>console.log("DerpPhone v7.4 – fly host + direct catalog + portrait src normalize");</script>
   </head>
   <body>
     <div class="wrap">
@@ -148,15 +148,42 @@
       function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
       function setDbg(x){ const d=$('dbg'); if (d) d.textContent='last: ' + x; }
 
+      // ---- portrait helpers (normalize URL/data to avoid mixed-content/relative/base64 issues)
+      function looksLikeBase64(s){
+        return typeof s === 'string' && s.length > 40 && /^[A-Za-z0-9+/=\s]+$/.test(s.slice(0,120));
+      }
+      function resolvePortraitSrc({ url, data }) {
+        let u = (url || '').trim();
+        let d = (data || '').trim();
+
+        if (u && u.startsWith('/')) u = HTTP_BASE.replace(/\/+$/,'') + u;   // relative → absolute to API host
+        if (u && u.startsWith('//')) u = 'https:' + u;                      // protocol-relative → https
+        if (u && u.startsWith('http://')) u = 'https://' + u.slice(7);      // upgrade http → https
+        if (u && u.startsWith('data:')) return u;                           // already data URL
+
+        if (!u && d) {
+          if (!d.startsWith('data:')) {
+            // default MIME; change to image/jpeg or image/webp if your assets differ
+            d = 'data:image/png;base64,' + d;
+          }
+          return d;
+        }
+        if (!u && looksLikeBase64(d)) return 'data:image/png;base64,' + d;
+
+        return u || '';
+      }
+
       function renderCatalog(entries){
         const grid = $('charGrid');
         grid.innerHTML = '';
 
-        (entries||[]).forEach(e=>{
+        (entries||[]).forEach((e, idx)=>{
           const id    = e.id;
-          const label = e.label || e.id;
-          const url   = e.portraitUrl || e.imageUrl || e.url || "";
-          const data  = e.portraitData || e.portrait || "";
+          const label = e.label || e.id || ('Char ' + (idx+1));
+          const src   = resolvePortraitSrc({
+            url:  e.portraitUrl || e.imageUrl || e.url || '',
+            data: e.portraitData || e.portrait || ''
+          });
 
           const btn = document.createElement('button');
           btn.className = 'charBtn';
@@ -167,13 +194,15 @@
           const portrait = document.createElement('div');
           portrait.className = 'portrait';
 
-          const src = url || data;
           if (src){
             const img = document.createElement('img');
             img.loading = 'lazy';
             img.decoding = 'async';
+            img.crossOrigin = 'anonymous';
+            img.referrerPolicy = 'no-referrer';
             img.src = src;
             img.onerror = () => {
+              console.warn('portrait failed for', id, src);
               portrait.innerHTML='';
               const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
               portrait.appendChild(fb);
@@ -265,8 +294,7 @@
         const panel = $('turnOrder');
         const btn   = $('btnRoll');
         panel.classList.remove('hidden');
-        panel.classList.add('force-show');
-        panel.style.display = 'block';
+        panel.style.display='block';
         btn.disabled = false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
         $('rollValue').textContent = '—';
         $('orderResult').classList.add('hidden');
@@ -306,7 +334,7 @@
           setStatus('Connected. In Lobby.', true);
           $('joinCard').classList.add('hidden');
           setLobbyVisible(true);
-          ensureGridVisible();                   /* NEW: show grid immediately */
+          ensureGridVisible();
 
           clearInterval(hbInterval);
           hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
@@ -328,7 +356,7 @@
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
 
-            /* NEW: if server sends CHARACTER_CATALOG directly, render it */
+            // Support direct catalog messages
             if (msg.type === 'CHARACTER_CATALOG') {
               renderCatalog(msg.entries || msg.list || msg.characters || []);
               return;
@@ -389,7 +417,7 @@
               return;
             }
 
-            // ---- Legacy Lobby STATE messages ----
+            // ---- Legacy Lobby STATE messages (original flow)
             if (msg.type !== 'STATE') return;
             const s = msg.state || {};
 
