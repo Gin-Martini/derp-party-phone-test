@@ -37,7 +37,6 @@
       .btn-accent{border-color:#155e75;background:#0e3a47}
       .btn-disabled{opacity:.6;pointer-events:none}
 
-      /* Character grid */
       #charGrid{ display:none; margin:12px 0; gap:22px 22px; grid-template-columns:repeat(3,minmax(0,1fr)); }
       .charBtn{ position:relative; display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
         padding:0;margin:0;border:0;background:transparent; outline:none;box-shadow:none;-webkit-tap-highlight-color:transparent;}
@@ -50,26 +49,20 @@
       .charBtn.selected .portrait{outline:2px solid var(--accent);outline-offset:2px}
       @media (max-width:380px){ .portrait{width:96px;height:96px} }
 
-      /* TURN ORDER overlay */
       #turnOrder{
-        position:fixed;
-        left:16px; right:16px;
+        position:fixed; left:16px; right:16px;
         bottom:calc(12px + env(safe-area-inset-bottom, 0px));
-        z-index:10001;
-        background:#141418;
-        border:1px solid #2a2a32;
-        border-radius:16px;
-        padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
+        z-index:10001; background:#141418; border:1px solid #2a2a32;
+        border-radius:16px; padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px));
       }
 
-      /* Small debug strip */
       #dbg{
         position:fixed; top:8px; right:8px; z-index:10002;
         font:12px/1.2 system-ui, sans-serif; color:#cbd5e1; background:#0b0b0d; border:1px solid #282a36;
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.4 – fly host + direct catalog + portrait src normalize");</script>
+    <script>console.log("DerpPhone v7.5 – YOUR_TURN → ROLL_MOVE, catalog & portraits intact");</script>
   </head>
   <body>
     <div class="wrap">
@@ -101,10 +94,10 @@
         </div>
       </div>
 
-      <!-- TURN ORDER OVERLAY -->
+      <!-- TURN / ROLL OVERLAY (reused for turn order & normal turns) -->
       <div id="turnOrder" class="card hidden">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-          <div class="pill">Roll for Turn Order</div>
+          <div class="pill" id="rollTitle">Roll</div>
           <div id="rollState" class="pill no">Waiting…</div>
         </div>
 
@@ -137,6 +130,9 @@
       const playerNameById = new Map();
       let startOverlayFallbackTO = null;
 
+      // in-game roll gate
+      let canRollNow = false;    // only true when YOUR_TURN for *me* arrives
+
       const $ = (id)=>document.getElementById(id);
 
       function log(x){ const el=$('log'); el.textContent += x + "\n"; el.scrollTop = el.scrollHeight; }
@@ -148,35 +144,28 @@
       function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
       function setDbg(x){ const d=$('dbg'); if (d) d.textContent='last: ' + x; }
 
-      // ---- portrait helpers (normalize URL/data to avoid mixed-content/relative/base64 issues)
+      // ---- portrait helpers
       function looksLikeBase64(s){
         return typeof s === 'string' && s.length > 40 && /^[A-Za-z0-9+/=\s]+$/.test(s.slice(0,120));
       }
       function resolvePortraitSrc({ url, data }) {
         let u = (url || '').trim();
         let d = (data || '').trim();
-
-        if (u && u.startsWith('/')) u = HTTP_BASE.replace(/\/+$/,'') + u;   // relative → absolute to API host
-        if (u && u.startsWith('//')) u = 'https:' + u;                      // protocol-relative → https
-        if (u && u.startsWith('http://')) u = 'https://' + u.slice(7);      // upgrade http → https
-        if (u && u.startsWith('data:')) return u;                           // already data URL
-
+        if (u && u.startsWith('/')) u = HTTP_BASE.replace(/\/+$/,'') + u;
+        if (u && u.startsWith('//')) u = 'https:' + u;
+        if (u && u.startsWith('http://')) u = 'https://' + u.slice(7);
+        if (u && u.startsWith('data:')) return u;
         if (!u && d) {
-          if (!d.startsWith('data:')) {
-            // default MIME; change to image/jpeg or image/webp if your assets differ
-            d = 'data:image/png;base64,' + d;
-          }
+          if (!d.startsWith('data:')) d = 'data:image/png;base64,' + d;
           return d;
         }
         if (!u && looksLikeBase64(d)) return 'data:image/png;base64,' + d;
-
         return u || '';
       }
 
       function renderCatalog(entries){
         const grid = $('charGrid');
         grid.innerHTML = '';
-
         (entries||[]).forEach((e, idx)=>{
           const id    = e.id;
           const label = e.label || e.id || ('Char ' + (idx+1));
@@ -193,7 +182,6 @@
 
           const portrait = document.createElement('div');
           portrait.className = 'portrait';
-
           if (src){
             const img = document.createElement('img');
             img.loading = 'lazy';
@@ -202,7 +190,6 @@
             img.referrerPolicy = 'no-referrer';
             img.src = src;
             img.onerror = () => {
-              console.warn('portrait failed for', id, src);
               portrait.innerHTML='';
               const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
               portrait.appendChild(fb);
@@ -273,34 +260,39 @@
         log('> PLAYER_READY');
       }
 
-      function bindRollButton(){
-        const b = $('btnRoll');
-        if (!b || b._derpBound) return;
-        b._derpBound = true;
-        b.addEventListener('click', () => {
-          if (!ws || myHasRolled) return;
-          try {
-            ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));
-            b.disabled = true;
-            b.classList.add('btn-disabled');
-            $('rollState').textContent = 'Rolling…';
-            setDbg('PLAYER_ROLL (sent)');
-          } catch(e) {}
-        }, { passive:true });
-      }
-      bindRollButton();
+      // ===== Roll UI =====
+      const rollPanel = $('turnOrder');
+      const rollBtn   = $('btnRoll');
+      const rollTitle = $('rollTitle');
+      const rollState = $('rollState');
+      const rollValue = $('rollValue');
 
+      function showRollOverlay(title){
+        rollTitle.textContent = title || 'Roll';
+        rollValue.textContent = '—';
+        rollState.textContent = 'Waiting…';
+        rollState.classList.remove('ok'); rollState.classList.add('no');
+        rollBtn.disabled = false; rollBtn.classList.remove('btn-disabled'); rollBtn.style.display='inline-block';
+        rollPanel.classList.remove('hidden'); rollPanel.style.display='block';
+        setTimeout(()=>window.scrollTo(0,0), 0);
+      }
+      function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
+
+      rollBtn.addEventListener('click', ()=>{
+        if (!ws) return;
+        if (!canRollNow) return; // only allowed during YOUR_TURN for me
+        try{
+          ws.send(JSON.stringify({ type:'ROLL_MOVE', ts: Date.now() })); // ← IMPORTANT: in-game roll
+          rollBtn.disabled = true;
+          rollBtn.classList.add('btn-disabled');
+          rollState.textContent = 'Rolling…';
+          setDbg('ROLL_MOVE (sent)');
+        }catch(_){}
+      }, {passive:true});
+
+      // ===== Join & WS =====
       $('btnShowRoll').onclick = () => {
-        const panel = $('turnOrder');
-        const btn   = $('btnRoll');
-        panel.classList.remove('hidden');
-        panel.style.display='block';
-        btn.disabled = false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
-        $('rollValue').textContent = '—';
-        $('orderResult').classList.add('hidden');
-        $('rollState').textContent = 'Waiting…';
-        $('rollState').classList.remove('ok'); $('rollState').classList.add('no');
-        bindRollButton();
+        showRollOverlay('Test Roll');
         setDbg('MANUAL SHOW');
         showToast('🔧 Test overlay shown');
       };
@@ -341,12 +333,9 @@
 
           clearTimeout(startOverlayFallbackTO);
           startOverlayFallbackTO = setTimeout(()=>{
-            const panel=$('turnOrder'), btn=$('btnRoll');
-            panel.classList.remove('hidden'); panel.style.display='block';
-            btn.disabled=false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
-            bindRollButton();
+            showRollOverlay('Roll');
             setDbg('FALLBACK SHOW');
-            showToast('⏱️ Waiting for host… you can still tap Roll');
+            showToast('⏱️ Waiting for host… you can still tap Roll (test)');
           }, 5000);
         };
 
@@ -356,7 +345,7 @@
             const msg = JSON.parse(ev.data);
             if (msg.type === 'PONG') return;
 
-            // Support direct catalog messages
+            // Direct catalog messages
             if (msg.type === 'CHARACTER_CATALOG') {
               renderCatalog(msg.entries || msg.list || msg.characters || []);
               return;
@@ -369,7 +358,7 @@
 
             if (type === 'TEXT' && payload.message) showToast(payload.message);
 
-            // ---- Turn Order flow ----
+            // === TURN-ORDER mini-phase ===
             if (type === 'TURN_ORDER_START') {
               clearTimeout(startOverlayFallbackTO);
               playerNameById.clear();
@@ -377,27 +366,17 @@
               for (const p of arr) if (p && p.playerId) playerNameById.set(p.playerId, p.name || p.playerId);
 
               myHasRolled = false;
-              $('rollValue').textContent = '—';
-              $('orderResult').classList.add('hidden');
-              $('rollState').textContent = 'Waiting…';
-              $('rollState').classList.remove('ok'); $('rollState').classList.add('no');
-
-              const panel = $('turnOrder'), btn=$('btnRoll');
-              panel.classList.remove('hidden'); panel.style.display='block';
-              btn.disabled = false; btn.classList.remove('btn-disabled'); btn.style.display='inline-block';
-              bindRollButton();
-              setTimeout(()=>window.scrollTo(0,0), 0);
-              showToast('🎲 Roll for turn order!');
+              showRollOverlay('Roll for Turn Order');
               return;
             }
 
             if (type === 'TURN_ORDER_FEEDBACK') {
               if (payload.playerId === playerId) {
                 myHasRolled = true;
-                $('rollValue').textContent = String(payload.roll);
-                $('rollState').textContent = 'Rolled';
-                $('rollState').classList.add('ok'); $('rollState').classList.remove('no');
-                const btn = $('btnRoll'); btn.disabled = true; btn.classList.add('btn-disabled');
+                rollValue.textContent = String(payload.roll);
+                rollState.textContent = 'Rolled';
+                rollState.classList.add('ok'); rollState.classList.remove('no');
+                rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
               }
               return;
             }
@@ -413,14 +392,44 @@
               const box = $('orderResult');
               box.innerHTML = lines;
               box.classList.remove('hidden');
-              setTimeout(() => { $('turnOrder').classList.add('hidden'); }, 1600);
+              setTimeout(() => { hideRollOverlay(); }, 1600);
               return;
             }
 
-            // ---- Legacy Lobby STATE messages (original flow)
+            // === MAIN GAME TURNS ===
+            if (type === 'YOUR_TURN') {
+              const isMe = (payload.playerId === playerId);
+              canRollNow = isMe;
+              if (isMe) {
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                hideRollOverlay();
+                showToast('⏳ Waiting for other player…', 1200);
+              }
+              return;
+            }
+
+            if (type === 'MOVE_START') {
+              // optional: show dice roll if server includes it later for me
+              if (payload.playerId === playerId) {
+                rollState.textContent = 'Rolled';
+                rollState.classList.add('ok'); rollState.classList.remove('no');
+                rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
+              }
+              return;
+            }
+
+            if (type === 'MOVE_DONE') {
+              // arrival; host will broadcast YOUR_TURN for next player afterwards
+              canRollNow = false;
+              hideRollOverlay();
+              return;
+            }
+
+            // ---- Legacy Lobby STATE ----
             if (msg.type !== 'STATE') return;
             const s = msg.state || {};
-
             switch(s.type){
               case 'CHARACTER_CATALOG':
                 renderCatalog(s.entries||[]);
@@ -472,6 +481,7 @@
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
+          canRollNow = false;
           const panel = $('turnOrder');
           if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
           setDbg('WS closed');
