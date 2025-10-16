@@ -133,6 +133,7 @@
 
       // in-game roll gate
       let canRollNow = false;
+      let hideOrderOverlayTO = null;
 
       const $ = (id)=>document.getElementById(id);
 
@@ -457,13 +458,25 @@
               const box = $('orderResult');
               box.innerHTML = lines;
               box.classList.remove('hidden');
-              setTimeout(() => { hideRollOverlay(); }, 1600);
+            
+              // OLD (buggy): setTimeout(() => { hideRollOverlay(); }, 1600);
+            
+              // NEW: only hide if it won't immediately be my turn,
+              // and even then, cancel if YOUR_TURN shows up.
+              clearTimeout(hideOrderOverlayTO);
+              const firstUp = ordered && ordered[0];
+              hideOrderOverlayTO = setTimeout(()=>{
+                if (!canRollNow && firstUp !== playerId) {
+                  hideRollOverlay();
+                }
+              }, 1600);
               return;
             }
 
            // === MAIN GAME TURNS ===
           if (type === 'YOUR_TURN') {
             try { console.log('[PHONE] YOUR_TURN raw payload:', payload); } catch(_){}
+            clearTimeout(hideOrderOverlayTO);   
             const pid  = (payload.playerId || payload.id || '').trim();
             const pname = (payload.name || '').trim();
             const isPidMatch = (pid && pid === playerId);
@@ -493,6 +506,7 @@
           // Handle legacy prompt separately (with the same name fallback)
           if (type === 'ROLL_PROMPT') {
             try { console.log('[PHONE] ROLL_PROMPT raw payload:', payload); } catch(_){}
+            clearTimeout(hideOrderOverlayTO);            // <<< prevent the race
             const pid  = (payload.playerId || payload.id || '').trim();
             const pname = (payload.name || '').trim();
             const isPidMatch = (pid && pid === playerId);
@@ -609,4 +623,5 @@
     </script>
   </body>
 </html>
+
 
