@@ -62,7 +62,7 @@
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.5 – YOUR_TURN → ROLL_MOVE, catalog & portraits intact");</script>
+    <script>console.log("DerpPhone v7.6 – TURN_ORDER + in-game roll fixed; portraits intact");</script>
   </head>
   <body>
     <div class="wrap">
@@ -94,7 +94,7 @@
         </div>
       </div>
 
-      <!-- TURN / ROLL OVERLAY (reused for turn order & normal turns) -->
+      <!-- TURN / ROLL OVERLAY -->
       <div id="turnOrder" class="card hidden">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
           <div class="pill" id="rollTitle">Roll</div>
@@ -127,6 +127,7 @@
 
       // turn-order client state
       let myHasRolled = false;
+      let inTurnOrder = false; // NEW: tracks turn-order phase
       const playerNameById = new Map();
       let startOverlayFallbackTO = null;
 
@@ -278,16 +279,33 @@
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
 
+      // CLICK: send PLAYER_ROLL during turn-order, ROLL_MOVE during normal turns
       rollBtn.addEventListener('click', ()=>{
         if (!ws) return;
-        if (!canRollNow) return; // only allowed during YOUR_TURN for me
-        try{
-          ws.send(JSON.stringify({ type:'ROLL_MOVE', ts: Date.now() })); // ← IMPORTANT: in-game roll
-          rollBtn.disabled = true;
-          rollBtn.classList.add('btn-disabled');
-          rollState.textContent = 'Rolling…';
-          setDbg('ROLL_MOVE (sent)');
-        }catch(_){}
+
+        // TURN-ORDER phase
+        if (inTurnOrder && !myHasRolled) {
+          try{
+            ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));
+            myHasRolled = true; // immediate UX feedback
+            rollBtn.disabled = true;
+            rollBtn.classList.add('btn-disabled');
+            rollState.textContent = 'Rolling…';
+            setDbg('PLAYER_ROLL (sent)');
+          }catch(_){}
+          return;
+        }
+
+        // IN-GAME turn
+        if (canRollNow) {
+          try{
+            ws.send(JSON.stringify({ type:'ROLL_MOVE', ts: Date.now() })); // in-game roll
+            rollBtn.disabled = true;
+            rollBtn.classList.add('btn-disabled');
+            rollState.textContent = 'Rolling…';
+            setDbg('ROLL_MOVE (sent)');
+          }catch(_){}
+        }
       }, {passive:true});
 
       // ===== Join & WS =====
@@ -360,6 +378,7 @@
 
             // === TURN-ORDER mini-phase ===
             if (type === 'TURN_ORDER_START') {
+              inTurnOrder = true; // NEW
               clearTimeout(startOverlayFallbackTO);
               playerNameById.clear();
               const arr = payload.players || [];
@@ -382,6 +401,7 @@
             }
 
             if (type === 'TURN_ORDER_DONE') {
+              inTurnOrder = false; // NEW
               const r = payload.ordered || [];
               const lines = r.map((pid,i) => {
                 const name = playerNameById.get(pid) || pid;
@@ -410,8 +430,8 @@
               return;
             }
 
-            if (type === 'MOVE_START') {
-              // optional: show dice roll if server includes it later for me
+            // NOTE: align to host event names (BEGIN/END)
+            if (type === 'MOVE_BEGIN') {
               if (payload.playerId === playerId) {
                 rollState.textContent = 'Rolled';
                 rollState.classList.add('ok'); rollState.classList.remove('no');
@@ -420,8 +440,7 @@
               return;
             }
 
-            if (type === 'MOVE_DONE') {
-              // arrival; host will broadcast YOUR_TURN for next player afterwards
+            if (type === 'MOVE_END') {
               canRollNow = false;
               hideRollOverlay();
               return;
@@ -481,7 +500,7 @@
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
-          canRollNow = false;
+          canRollNow = false; inTurnOrder = false; myHasRolled = false;
           const panel = $('turnOrder');
           if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
           setDbg('WS closed');
