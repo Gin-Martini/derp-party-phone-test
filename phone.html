@@ -62,7 +62,7 @@
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.6 – TURN_ORDER + in-game roll fixed; portraits intact");</script>
+    <script>console.log("DerpPhone v7.7 – legacy/new roll events bridged; portraits intact");</script>
   </head>
   <body>
     <div class="wrap">
@@ -279,19 +279,41 @@
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
 
-      // CLICK: send PLAYER_ROLL during turn-order, ROLL_MOVE during normal turns
+      // ==== EVENT NAME NORMALIZATION (legacy -> modern) ====
+      function normType(t){
+        if(!t) return t;
+        const m = {
+          // TURN ORDER
+          'TURNORDER_START':'TURN_ORDER_START',
+          'TURNORDER_ROLL':'TURN_ORDER_FEEDBACK',
+          'TURNORDER_FEEDBACK':'TURN_ORDER_FEEDBACK',
+          'TURNORDER_DONE':'TURN_ORDER_DONE',
+          // MAIN TURNS
+          'START_TURN':'YOUR_TURN',
+          'YOURTURN':'YOUR_TURN',
+          'ROLL_PROMPT':'YOUR_TURN',
+          'MOVE_START':'MOVE_BEGIN',
+          'MOVE_STARTED':'MOVE_BEGIN',
+          'MOVE_DONE':'MOVE_END',
+          'MOVE_FINISH':'MOVE_END',
+        };
+        return m[t] || t;
+      }
+
+      // CLICK: send PLAYER_ROLL during turn-order, ROLL_MOVE during normal turns (with legacy fallbacks)
       rollBtn.addEventListener('click', ()=>{
         if (!ws) return;
 
         // TURN-ORDER phase
         if (inTurnOrder && !myHasRolled) {
           try{
-            ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));
+            ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));                  // modern
+            ws.send(JSON.stringify({ type:'ROLL', phase:'TURN_ORDER', ts: Date.now() }));     // legacy fallback
             myHasRolled = true; // immediate UX feedback
             rollBtn.disabled = true;
             rollBtn.classList.add('btn-disabled');
             rollState.textContent = 'Rolling…';
-            setDbg('PLAYER_ROLL (sent)');
+            setDbg('PLAYER_ROLL/ROLL (turn-order) sent');
           }catch(_){}
           return;
         }
@@ -299,11 +321,12 @@
         // IN-GAME turn
         if (canRollNow) {
           try{
-            ws.send(JSON.stringify({ type:'ROLL_MOVE', ts: Date.now() })); // in-game roll
+            ws.send(JSON.stringify({ type:'ROLL_MOVE', ts: Date.now() }));                    // modern
+            ws.send(JSON.stringify({ type:'ROLL', phase:'MOVE', ts: Date.now() }));           // legacy fallback
             rollBtn.disabled = true;
             rollBtn.classList.add('btn-disabled');
             rollState.textContent = 'Rolling…';
-            setDbg('ROLL_MOVE (sent)');
+            setDbg('ROLL_MOVE/ROLL (move) sent');
           }catch(_){}
         }
       }, {passive:true});
@@ -369,30 +392,38 @@
               return;
             }
 
-            const innerState = (msg && msg.type === 'STATE' && msg.state) ? msg.state : null;
-            const type = innerState ? innerState.type : msg.type;
-            const payload = innerState || msg;
+            // Support raw and STATE-wrapped forms
+            const isWrapped = (msg && msg.type === 'STATE' && msg.state);
+            const inner = isWrapped ? msg.state : msg;
+
+            // Normalize the event type (handles legacy aliases)
+            const type = normType(inner.type || msg.type);
+            const payload = inner;
             setDbg(type || 'unknown');
 
             if (type === 'TEXT' && payload.message) showToast(payload.message);
 
-            // === TURN-ORDER mini-phase ===
+            // === TURN-ORDER ===
             if (type === 'TURN_ORDER_START') {
-              inTurnOrder = true; // NEW
+              inTurnOrder = true;
               clearTimeout(startOverlayFallbackTO);
               playerNameById.clear();
-              const arr = payload.players || [];
-              for (const p of arr) if (p && p.playerId) playerNameById.set(p.playerId, p.name || p.playerId);
-
+              const arr = payload.players || payload.order || [];
+              for (const p of arr) if (p && (p.playerId || p.id)) {
+                const pid = p.playerId || p.id;
+                playerNameById.set(pid, p.name || pid);
+              }
               myHasRolled = false;
               showRollOverlay('Roll for Turn Order');
               return;
             }
 
             if (type === 'TURN_ORDER_FEEDBACK') {
-              if (payload.playerId === playerId) {
+              const who  = payload.playerId || payload.id;
+              const roll = (payload.roll != null ? payload.roll : payload.value);
+              if (who === playerId) {
                 myHasRolled = true;
-                rollValue.textContent = String(payload.roll);
+                rollValue.textContent = String(roll);
                 rollState.textContent = 'Rolled';
                 rollState.classList.add('ok'); rollState.classList.remove('no');
                 rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
@@ -401,13 +432,14 @@
             }
 
             if (type === 'TURN_ORDER_DONE') {
-              inTurnOrder = false; // NEW
-              const r = payload.ordered || [];
-              const lines = r.map((pid,i) => {
+              inTurnOrder = false;
+              const ordered = payload.ordered || payload.order || [];
+              const rolls   = payload.rolls || payload.values || {};
+              const lines = ordered.map((pid,i)=>{
                 const name = playerNameById.get(pid) || pid;
-                const me = (pid === playerId) ? ' (you)' : '';
-                const roll = (payload.rolls && payload.rolls[pid] != null) ? ` — ${payload.rolls[pid]}` : '';
-                return `${i+1}. ${name}${me}${roll}`;
+                const me   = (pid === playerId) ? ' (you)' : '';
+                const r    = (rolls && rolls[pid] != null) ? ` — ${rolls[pid]}` : '';
+                return `${i+1}. ${name}${me}${r}`;
               }).join('<br/>');
               const box = $('orderResult');
               box.innerHTML = lines;
@@ -418,7 +450,7 @@
 
             // === MAIN GAME TURNS ===
             if (type === 'YOUR_TURN') {
-              const isMe = (payload.playerId === playerId);
+              const isMe = ((payload.playerId || payload.id) === playerId);
               canRollNow = isMe;
               if (isMe) {
                 showRollOverlay('Your Turn — Roll!');
@@ -430,9 +462,8 @@
               return;
             }
 
-            // NOTE: align to host event names (BEGIN/END)
             if (type === 'MOVE_BEGIN') {
-              if (payload.playerId === playerId) {
+              if ((payload.playerId || payload.id) === playerId) {
                 rollState.textContent = 'Rolled';
                 rollState.classList.add('ok'); rollState.classList.remove('no');
                 rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
