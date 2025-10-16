@@ -62,7 +62,7 @@
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.8 – turn events broadened; lenient pid; STATE fallback");</script>
+    <script>console.log("DerpPhone v7.9 – phase-guarded roll overlay; TURN_STATE tightened");</script>
   </head>
   <body>
     <div class="wrap">
@@ -125,15 +125,18 @@
       let myCharId = null;
       const takenChars = new Set();
 
-      // turn-order client state
+      // turn-order / game state
       let myHasRolled = false;
       let inTurnOrder = false;
       const playerNameById = new Map();
-      let startOverlayFallbackTO = null;
+
+      // game phase guard to prevent roll UI in lobby
+      // 'lobby' | 'turn_order' | 'in_game'
+      let phase = 'lobby';
+      const setPhase = (p)=>{ phase = p; setDbg('phase=' + p); };
 
       // in-game roll gate
       let canRollNow = false;
-      let hideOrderOverlayTO = null;
 
       const $ = (id)=>document.getElementById(id);
 
@@ -270,6 +273,8 @@
       const rollValue = $('rollValue');
 
       function showRollOverlay(title){
+        // HARD GUARD: never show in lobby
+        if (phase === 'lobby') { setDbg('overlay blocked in lobby'); return; }
         rollTitle.textContent = title || 'Roll';
         rollValue.textContent = '—';
         rollState.textContent = 'Waiting…';
@@ -296,7 +301,7 @@
           'TURNBEGIN':'YOUR_TURN',
           'TURN_BEGIN':'YOUR_TURN',
           'PLAYER_TURN':'YOUR_TURN',
-          'CURRENT_TURN':'YOUR_TURN',          // some relays broadcast this
+          'CURRENT_TURN':'YOUR_TURN',
           // PROMPTS (broadened)
           'PROMPT_ROLL':'ROLL_PROMPT',
           'ROLLREQUEST':'ROLL_PROMPT',
@@ -347,9 +352,9 @@
 
       // ===== Join & WS =====
       $('btnShowRoll').onclick = () => {
-        showRollOverlay('Test Roll');
-        setDbg('MANUAL SHOW');
-        showToast('🔧 Test overlay shown');
+        // dev-only tester: only shows if not in lobby
+        if (phase !== 'lobby') { showRollOverlay('Test Roll'); showToast('🔧 Test overlay shown'); }
+        else { showToast('Overlay disabled in lobby'); }
       };
 
       $('btnJoin').onclick = async () => {
@@ -377,6 +382,7 @@
         ws = new WebSocket(WS_URL);
         ws.onopen = () => {
           log('WS open.');
+          setPhase('lobby'); // explicitly mark lobby
           ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
           setStatus('Connected. In Lobby.', true);
           $('joinCard').classList.add('hidden');
@@ -386,12 +392,7 @@
           clearInterval(hbInterval);
           hbInterval = setInterval(()=> { try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {} }, 5000);
 
-          clearTimeout(startOverlayFallbackTO);
-          startOverlayFallbackTO = setTimeout(()=>{
-            showRollOverlay('Roll');
-            setDbg('FALLBACK SHOW');
-            showToast('⏱️ Waiting for host… you can still tap Roll (test)');
-          }, 5000);
+          // NOTE: removed the 5s fallback roll overlay entirely
         };
 
         ws.onmessage = (ev) => {
@@ -419,8 +420,8 @@
 
             // === TURN-ORDER ===
             if (type === 'TURN_ORDER_START') {
+              setPhase('turn_order');
               inTurnOrder = true;
-              clearTimeout(startOverlayFallbackTO);
               playerNameById.clear();
               const arr = payload.players || payload.order || [];
               for (const p of arr) if (p && (p.playerId || p.id)) {
@@ -447,6 +448,7 @@
 
             if (type === 'TURN_ORDER_DONE') {
               inTurnOrder = false;
+              setPhase('in_game');
               const ordered = payload.ordered || payload.order || [];
               const rolls   = payload.rolls || payload.values || {};
               const lines = ordered.map((pid,i)=>{
@@ -458,74 +460,59 @@
               const box = $('orderResult');
               box.innerHTML = lines;
               box.classList.remove('hidden');
-            
-              // OLD (buggy): setTimeout(() => { hideRollOverlay(); }, 1600);
-            
-              // NEW: only hide if it won't immediately be my turn,
-              // and even then, cancel if YOUR_TURN shows up.
-              clearTimeout(hideOrderOverlayTO);
-              const firstUp = ordered && ordered[0];
-              hideOrderOverlayTO = setTimeout(()=>{
-                if (!canRollNow && firstUp !== playerId) {
-                  hideRollOverlay();
-                }
-              }, 1600);
+
+              // Do not auto-hide here; YOUR_TURN/ROLL_PROMPT will manage visibility.
               return;
             }
 
-           // === MAIN GAME TURNS ===
-          if (type === 'YOUR_TURN') {
-            try { console.log('[PHONE] YOUR_TURN raw payload:', payload); } catch(_){}
-            clearTimeout(hideOrderOverlayTO);   
-            const pid  = (payload.playerId || payload.id || '').trim();
-            const pname = (payload.name || '').trim();
-            const isPidMatch = (pid && pid === playerId);
-            const isNameMatch = (pname && pname === ($('name').value||'').trim());
-          
-            // Accept if playerId matches OR (fallback) the name matches.
-            const isMe = isPidMatch || (!isPidMatch && isNameMatch);
-          
-            if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
-          
-            canRollNow = isMe;
-          
-            if (isMe) {
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
-              rollState.textContent = 'Waiting…';
-              rollState.classList.remove('ok'); rollState.classList.add('no');
-              showRollOverlay('Your Turn — Roll!');
-              showToast('🎲 Your turn! Tap Roll.');
-            } else {
-              hideRollOverlay();
-              showToast('⏳ Waiting for other player…', 1200);
+            // === MAIN GAME TURNS ===
+            if (type === 'YOUR_TURN') {
+              setPhase('in_game');
+              const pid  = (payload.playerId || payload.id || '').trim();
+              const pname = (payload.name || '').trim();
+              const isPidMatch = (pid && pid === playerId);
+              const isNameMatch = (pname && pname === ($('name').value||'').trim());
+              const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+
+              if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
+
+              canRollNow = isMe;
+              if (isMe) {
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                hideRollOverlay();
+                showToast('⏳ Waiting for other player…', 1200);
+              }
+              return;
             }
-            return;
-          }
-          
-          // Handle legacy prompt separately (with the same name fallback)
-          if (type === 'ROLL_PROMPT') {
-            try { console.log('[PHONE] ROLL_PROMPT raw payload:', payload); } catch(_){}
-            clearTimeout(hideOrderOverlayTO);            // <<< prevent the race
-            const pid  = (payload.playerId || payload.id || '').trim();
-            const pname = (payload.name || '').trim();
-            const isPidMatch = (pid && pid === playerId);
-            const isNameMatch = (pname && pname === ($('name').value||'').trim());
-            const isMe = isPidMatch || (!isPidMatch && isNameMatch);
-          
-            if (isMe) {
-              canRollNow = true;
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
-              rollState.textContent = 'Waiting…';
-              rollState.classList.remove('ok'); rollState.classList.add('no');
-              showRollOverlay('Your Turn — Roll!');
-              showToast('🎲 Your turn! Tap Roll.');
-            } else {
-              setDbg('ROLL_PROMPT (not me)');
+
+            // Handle legacy prompt separately (with the same name fallback)
+            if (type === 'ROLL_PROMPT') {
+              setPhase('in_game');
+              const pid  = (payload.playerId || payload.id || '').trim();
+              const pname = (payload.name || '').trim();
+              const isPidMatch = (pid && pid === playerId);
+              const isNameMatch = (pname && pname === ($('name').value||'').trim());
+              const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+
+              if (isMe) {
+                canRollNow = true;
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                setDbg('ROLL_PROMPT (not me)');
+              }
+              return;
             }
-            return;
-          }
 
             if (type === 'MOVE_BEGIN') {
               if (idsEqual(payload.playerId || payload.id, playerId)) {
@@ -542,7 +529,7 @@
               return;
             }
 
-            // ---- STATE fallbacks for turn info ----
+            // ---- STATE fallbacks / snapshots ----
             if (msg.type === 'STATE') {
               const s = msg.state || {};
 
@@ -552,6 +539,9 @@
               }
 
               if (s.type === 'LOBBY_STATE') {
+                // Explicitly mark lobby & hide any roll UI
+                setPhase('lobby');
+                hideRollOverlay();
                 const players = s.players||[];
                 const text = players.length
                   ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
@@ -576,16 +566,22 @@
               if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
 
               if (s.type === 'LOBBY_LOCKED') {
+                // Transition out of lobby; wait for explicit TURN_ORDER/YOUR_TURN to show roll UI
                 setStatus('Game starting…', true);
                 setReadyPill(false);
                 $('lobbyArea').classList.add('hidden');
+                setPhase('in_game');
+                hideRollOverlay();
                 return;
               }
 
               // TURN state snapshots from some relays
               if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
+                // Never act on TURN_STATE while in lobby, and require a valid pid
+                if (phase === 'lobby') return;
                 const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
-                if (!pid || idsEqual(pid, playerId)) {
+                if (!pid) return; // do NOT show overlay without a target player
+                if (idsEqual(pid, playerId)) {
                   canRollNow = true;
                   showRollOverlay('Your Turn — Roll!');
                   rollBtn.disabled = false;
@@ -607,12 +603,12 @@
           setLobbyVisible(false);
           $('joinCard').classList.remove('hidden');
           clearInterval(hbInterval);
-          clearTimeout(startOverlayFallbackTO);
           myReady = false; myCharId = null; takenChars.clear();
           $('charGrid').innerHTML = '';
           enableReadyButton(false);
           setReadyPill(false);
           canRollNow = false; inTurnOrder = false; myHasRolled = false;
+          setPhase('lobby');
           const panel = $('turnOrder');
           if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
           setDbg('WS closed');
@@ -623,5 +619,3 @@
     </script>
   </body>
 </html>
-
-
