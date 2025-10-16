@@ -62,7 +62,7 @@
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.7 – legacy/new roll events bridged; portraits intact");</script>
+    <script>console.log("DerpPhone v7.8 – turn events broadened; lenient pid; STATE fallback");</script>
   </head>
   <body>
     <div class="wrap">
@@ -127,12 +127,12 @@
 
       // turn-order client state
       let myHasRolled = false;
-      let inTurnOrder = false; // NEW
+      let inTurnOrder = false;
       const playerNameById = new Map();
       let startOverlayFallbackTO = null;
 
       // in-game roll gate
-      let canRollNow = false;    // only true when YOUR_TURN for *me* arrives
+      let canRollNow = false;
 
       const $ = (id)=>document.getElementById(id);
 
@@ -288,10 +288,21 @@
           'TURNORDER_ROLL':'TURN_ORDER_FEEDBACK',
           'TURNORDER_FEEDBACK':'TURN_ORDER_FEEDBACK',
           'TURNORDER_DONE':'TURN_ORDER_DONE',
-          // MAIN TURNS
+          // MAIN TURNS (broadened)
           'START_TURN':'YOUR_TURN',
           'YOURTURN':'YOUR_TURN',
-          // DO NOT normalize ROLL_PROMPT here
+          'TURN_START':'YOUR_TURN',
+          'TURNBEGIN':'YOUR_TURN',
+          'TURN_BEGIN':'YOUR_TURN',
+          'PLAYER_TURN':'YOUR_TURN',
+          'CURRENT_TURN':'YOUR_TURN',          // some relays broadcast this
+          // PROMPTS (broadened)
+          'PROMPT_ROLL':'ROLL_PROMPT',
+          'ROLLREQUEST':'ROLL_PROMPT',
+          'ROLL_REQUEST':'ROLL_PROMPT',
+          'ROLLNOW':'ROLL_PROMPT',
+          'TURN_PROMPT':'ROLL_PROMPT',
+          // MOVES
           'MOVE_START':'MOVE_BEGIN',
           'MOVE_STARTED':'MOVE_BEGIN',
           'MOVE_DONE':'MOVE_END',
@@ -299,6 +310,8 @@
         };
         return m[t] || t;
       }
+
+      function idsEqual(a,b){ return String(a||'').trim() === String(b||'').trim(); }
 
       // CLICK: send PLAYER_ROLL during turn-order, ROLL_MOVE during normal turns (with legacy fallbacks)
       rollBtn.addEventListener('click', ()=>{
@@ -308,8 +321,8 @@
         if (inTurnOrder && !myHasRolled) {
           try{
             ws.send(JSON.stringify({ type:'PLAYER_ROLL', ts: Date.now() }));                  // modern
-            ws.send(JSON.stringify({ type:'ROLL', phase:'TURN_ORDER', ts: Date.now() }));     // legacy fallback
-            myHasRolled = true; // immediate UX feedback
+            ws.send(JSON.stringify({ type:'ROLL', phase:'TURN_ORDER', ts: Date.now() }));     // legacy
+            myHasRolled = true;
             rollBtn.disabled = true;
             rollBtn.classList.add('btn-disabled');
             rollState.textContent = 'Rolling…';
@@ -322,7 +335,7 @@
         if (canRollNow) {
           try{
             ws.send(JSON.stringify({ type:'ROLL_MOVE', ts: Date.now() }));                    // modern
-            ws.send(JSON.stringify({ type:'ROLL', phase:'MOVE', ts: Date.now() }));           // legacy fallback
+            ws.send(JSON.stringify({ type:'ROLL', phase:'MOVE', ts: Date.now() }));           // legacy
             rollBtn.disabled = true;
             rollBtn.classList.add('btn-disabled');
             rollState.textContent = 'Rolling…';
@@ -448,58 +461,46 @@
               return;
             }
 
-          // === MAIN GAME TURNS ===
-          if (type === 'YOUR_TURN') {
-            // Debug: see exactly what we got
-            try { console.log('[PHONE] YOUR_TURN raw payload:', payload); } catch(_){}
-          
-            const pid = (payload.playerId || payload.id);
-          
-            // If no playerId (some legacy/odd relays), IGNORE instead of hiding.
-            if (!pid) { setDbg('YOUR_TURN (missing pid) ignored'); return; }
-          
-            const isMe = (pid === playerId);
-            canRollNow = isMe;
-          
-            if (isMe) {
-              // Hard-show the overlay and re-enable the button every time we get YOUR_TURN
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
-              rollState.textContent = 'Waiting…';
-              rollState.classList.remove('ok'); rollState.classList.add('no');
-              showRollOverlay('Your Turn — Roll!');
-              showToast('🎲 Your turn! Tap Roll.');
-            } else {
-              // Only hide for non-me turns if we positively know the pid
-              hideRollOverlay();
-              showToast('⏳ Waiting for other player…', 1200);
-            }
-            return;
-          }
-          
-          // Handle legacy prompt separately (never hide overlay if it isn’t clearly for me)
-          if (type === 'ROLL_PROMPT') {
-            try { console.log('[PHONE] ROLL_PROMPT raw payload:', payload); } catch(_){}
-            const pid = (payload.playerId || payload.id);
-            if (pid && pid === playerId) {
-              canRollNow = true;
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
-              rollState.textContent = 'Waiting…';
-              rollState.classList.remove('ok'); rollState.classList.add('no');
-              showRollOverlay('Your Turn — Roll!');
-              showToast('🎲 Your turn! Tap Roll.');
-            } else {
-              // No pid or not me? Do nothing—don’t clobber the UI.
-              setDbg('ROLL_PROMPT (not me or no pid) noop');
-            }
-            return;
-          }
+            // === MAIN GAME TURNS ===
+            if (type === 'YOUR_TURN') {
+              const pid = (payload.playerId ?? payload.id ?? payload.currentPlayerId);
+              const isMe = (!pid) || idsEqual(pid, playerId); // lenient: missing pid -> assume me
+              canRollNow = !!isMe;
 
+              if (isMe) {
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                // positively know it's someone else — hide
+                hideRollOverlay();
+                showToast('⏳ Waiting for other player…', 1200);
+              }
+              return;
+            }
 
+            // Legacy/alt prompt names normalized to ROLL_PROMPT
+            if (type === 'ROLL_PROMPT') {
+              const pid = (payload.playerId ?? payload.id ?? payload.currentPlayerId);
+              if (!pid || idsEqual(pid, playerId)) {
+                canRollNow = true;
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                setDbg('ROLL_PROMPT (other player)');
+              }
+              return;
+            }
 
             if (type === 'MOVE_BEGIN') {
-              if ((payload.playerId || payload.id) === playerId) {
+              if (idsEqual(payload.playerId || payload.id, playerId)) {
                 rollState.textContent = 'Rolled';
                 rollState.classList.add('ok'); rollState.classList.remove('no');
                 rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
@@ -513,45 +514,61 @@
               return;
             }
 
-            // ---- Legacy Lobby STATE ----
-            if (msg.type !== 'STATE') return;
-            const s = msg.state || {};
-            switch(s.type){
-              case 'CHARACTER_CATALOG':
-                renderCatalog(s.entries||[]);
-                break;
+            // ---- STATE fallbacks for turn info ----
+            if (msg.type === 'STATE') {
+              const s = msg.state || {};
 
-              case 'LOBBY_STATE': {
+              if (s.type === 'CHARACTER_CATALOG') {
+                renderCatalog(s.entries||[]);
+                return;
+              }
+
+              if (s.type === 'LOBBY_STATE') {
                 const players = s.players||[];
                 const text = players.length
                   ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
                   : '—';
                 setStatus('Lobby: ' + text, true);
                 markTaken(s.taken||[]);
-                break;
+                return;
               }
 
-              case 'CHARACTER_TAKEN':
+              if (s.type === 'CHARACTER_TAKEN') {
                 takenChars.add(String(s.charId));
                 markTaken([...takenChars]);
-                break;
+                return;
+              }
 
-              case 'CHARACTER_PICKED':
+              if (s.type === 'CHARACTER_PICKED') {
                 applyCharacterPicked(s.playerId, s.charId);
-                break;
+                return;
+              }
 
-              case 'READY_OPEN':  showToast('Ready phase open'); break;
-              case 'READY_CLOSE': showToast('Ready closed'); break;
+              if (s.type === 'READY_OPEN')  { showToast('Ready phase open'); return; }
+              if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
 
-              case 'LOBBY_LOCKED':
+              if (s.type === 'LOBBY_LOCKED') {
                 setStatus('Game starting…', true);
                 setReadyPill(false);
                 $('lobbyArea').classList.add('hidden');
-                break;
+                return;
+              }
 
-              case 'TEXT':
-                showToast('📣 ' + (s.message || 'Info'));
-                break;
+              // TURN state snapshots from some relays
+              if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
+                const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
+                if (!pid || idsEqual(pid, playerId)) {
+                  canRollNow = true;
+                  showRollOverlay('Your Turn — Roll!');
+                  rollBtn.disabled = false;
+                  rollBtn.classList.remove('btn-disabled');
+                  rollState.textContent = 'Waiting…';
+                  rollState.classList.remove('ok'); rollState.classList.add('no');
+                }
+                return;
+              }
+
+              if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
             }
           } catch(e) { console.error(e); }
         };
@@ -578,5 +595,3 @@
     </script>
   </body>
 </html>
-
-
