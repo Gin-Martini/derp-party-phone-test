@@ -461,43 +461,57 @@
               return;
             }
 
-            // === MAIN GAME TURNS ===
-            if (type === 'YOUR_TURN') {
-              const pid = (payload.playerId ?? payload.id ?? payload.currentPlayerId);
-              const isMe = (!pid) || idsEqual(pid, playerId); // lenient: missing pid -> assume me
-              canRollNow = !!isMe;
-
-              if (isMe) {
-                rollBtn.disabled = false;
-                rollBtn.classList.remove('btn-disabled');
-                rollState.textContent = 'Waiting…';
-                rollState.classList.remove('ok'); rollState.classList.add('no');
-                showRollOverlay('Your Turn — Roll!');
-                showToast('🎲 Your turn! Tap Roll.');
-              } else {
-                // positively know it's someone else — hide
-                hideRollOverlay();
-                showToast('⏳ Waiting for other player…', 1200);
-              }
-              return;
+           // === MAIN GAME TURNS ===
+          if (type === 'YOUR_TURN') {
+            try { console.log('[PHONE] YOUR_TURN raw payload:', payload); } catch(_){}
+            const pid  = (payload.playerId || payload.id || '').trim();
+            const pname = (payload.name || '').trim();
+            const isPidMatch = (pid && pid === playerId);
+            const isNameMatch = (pname && pname === ($('name').value||'').trim());
+          
+            // Accept if playerId matches OR (fallback) the name matches.
+            const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+          
+            if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
+          
+            canRollNow = isMe;
+          
+            if (isMe) {
+              rollBtn.disabled = false;
+              rollBtn.classList.remove('btn-disabled');
+              rollState.textContent = 'Waiting…';
+              rollState.classList.remove('ok'); rollState.classList.add('no');
+              showRollOverlay('Your Turn — Roll!');
+              showToast('🎲 Your turn! Tap Roll.');
+            } else {
+              hideRollOverlay();
+              showToast('⏳ Waiting for other player…', 1200);
             }
-
-            // Legacy/alt prompt names normalized to ROLL_PROMPT
-            if (type === 'ROLL_PROMPT') {
-              const pid = (payload.playerId ?? payload.id ?? payload.currentPlayerId);
-              if (!pid || idsEqual(pid, playerId)) {
-                canRollNow = true;
-                rollBtn.disabled = false;
-                rollBtn.classList.remove('btn-disabled');
-                rollState.textContent = 'Waiting…';
-                rollState.classList.remove('ok'); rollState.classList.add('no');
-                showRollOverlay('Your Turn — Roll!');
-                showToast('🎲 Your turn! Tap Roll.');
-              } else {
-                setDbg('ROLL_PROMPT (other player)');
-              }
-              return;
+            return;
+          }
+          
+          // Handle legacy prompt separately (with the same name fallback)
+          if (type === 'ROLL_PROMPT') {
+            try { console.log('[PHONE] ROLL_PROMPT raw payload:', payload); } catch(_){}
+            const pid  = (payload.playerId || payload.id || '').trim();
+            const pname = (payload.name || '').trim();
+            const isPidMatch = (pid && pid === playerId);
+            const isNameMatch = (pname && pname === ($('name').value||'').trim());
+            const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+          
+            if (isMe) {
+              canRollNow = true;
+              rollBtn.disabled = false;
+              rollBtn.classList.remove('btn-disabled');
+              rollState.textContent = 'Waiting…';
+              rollState.classList.remove('ok'); rollState.classList.add('no');
+              showRollOverlay('Your Turn — Roll!');
+              showToast('🎲 Your turn! Tap Roll.');
+            } else {
+              setDbg('ROLL_PROMPT (not me)');
             }
+            return;
+          }
 
             if (type === 'MOVE_BEGIN') {
               if (idsEqual(payload.playerId || payload.id, playerId)) {
@@ -595,3 +609,4 @@
     </script>
   </body>
 </html>
+
