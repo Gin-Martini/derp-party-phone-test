@@ -529,6 +529,32 @@
               return;
             }
 
+            // === SPACE / COINS feedback (added) ===
+            if (type === 'SPACE_LANDED') {
+              // payload: { playerId, spaceIndex, spaceType }
+              const idx = payload.spaceIndex;
+              const kind = payload.spaceType || 'Unknown';
+              showToast(`🧭 Landed on ${kind} (space ${idx})`);
+              return;
+            }
+            
+            if (type === 'COINS_DELTA') {
+              // payload: { playerId, delta, total, reason }
+              const d = Number(payload.delta || 0);
+              const total = Number(payload.total || 0);
+              const sign = d > 0 ? '+' : '';
+              showToast(`🪙 Coins ${sign}${d} → ${total}`);
+              return;
+            }
+            
+            if (type === 'SPACE_RESOLVE') {
+              // payload: { playerId, spaceIndex, spaceType, outcome }
+              const outcome = payload.outcome || 'Resolved';
+              showToast(`✅ ${outcome}`);
+              return;
+            }
+
+            
             // ---- STATE fallbacks / snapshots ----
             if (msg.type === 'STATE') {
               const s = msg.state || {};
@@ -619,3 +645,4 @@
     </script>
   </body>
 </html>
+
