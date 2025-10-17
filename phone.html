@@ -395,6 +395,76 @@
           // NOTE: removed the 5s fallback roll overlay entirely
         };
 
+        // AFTER (replace entire handler)
+        $('btnJoin').onclick = async () => {
+          roomId = ($('room').value||'').trim().toUpperCase();
+          const name = ($('name').value||'').trim() || 'Player';
+          if (!roomId) { alert('Enter room code.'); return; }
+        
+          setStatus('Joining…', true);
+        
+          try {
+            const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name }),
+              // If your relay uses cookies/session, uncomment:
+              // credentials: 'include',
+              // mode: 'cors',
+            });
+        
+            if (!resp.ok) {
+              const txt = await resp.text().catch(()=>'<no body>');
+              log(`Join HTTP failed: ${resp.status} ${txt}`);
+              setStatus(`Join failed (${resp.status})`);
+              showToast('Could not join room. Check code & capacity.');
+              return;
+            }
+        
+            const j = await resp.json().catch(()=> ({}));
+            playerId = j.playerId || j.id || '';
+            if (!playerId) {
+              log('Join response missing playerId: ' + JSON.stringify(j));
+              setStatus('Join failed (no playerId)');
+              showToast('Join failed: bad server response.');
+              return;
+            }
+            log('Got playerId: ' + playerId);
+          } catch (e) {
+            log('HTTP error: ' + e);
+            setStatus('HTTP error');
+            showToast('Network error while joining.');
+            return;
+          }
+        
+          // Open WS after successful HTTP join
+          try {
+            ws = new WebSocket(WS_URL);
+          } catch (e) {
+            log('WS construct error: ' + e);
+            setStatus('WebSocket error');
+            return;
+          }
+        
+          ws.onopen = () => {
+            log('WS open.');
+            setPhase('lobby');
+            ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
+            setStatus('Connected. In Lobby.', true);
+            $('joinCard').classList.add('hidden');
+            setLobbyVisible(true);
+            ensureGridVisible();
+        
+            clearInterval(hbInterval);
+            hbInterval = setInterval(()=> {
+              try { ws.readyState===1 && ws.send(JSON.stringify({ type:'PING' })); } catch(_) {}
+            }, 5000);
+          };
+        
+          // (keep your existing ws.onmessage / ws.onclose handlers as-is)
+        };
+
+        
         ws.onmessage = (ev) => {
           log('< ' + ev.data);
           try {
@@ -659,5 +729,6 @@
     </script>
   </body>
 </html>
+
 
 
