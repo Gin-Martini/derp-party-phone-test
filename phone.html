@@ -90,7 +90,7 @@
         <div id="charGrid"></div>
 
         <div class="row" style="margin-top:10px">
-          <button id="btnReady" class="btn-accent btn-disabled" disabled>I’m Ready</button>
+          <button id="btnReady" class="btn-accent btn-disabled" disabled type="button">I’m Ready</button>
         </div>
       </div>
 
@@ -265,6 +265,14 @@
         log('> PLAYER_READY');
       }
 
+      // Enable the Ready button to actually send the signal
+      $('btnReady').addEventListener('click', () => {
+        // guard against accidental taps while disabled
+        const b = $('btnReady');
+        if (b.disabled) return;
+        sendReady();
+      }, { passive: true });
+            
       // ===== Roll UI =====
       const rollPanel = $('turnOrder');
       const rollBtn   = $('btnRoll');
@@ -886,3 +894,4 @@ $('btnJoin').onclick = async () => {
   };
 };
 </script>
+
