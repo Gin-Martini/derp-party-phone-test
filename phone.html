@@ -461,6 +461,20 @@
               box.innerHTML = lines;
               box.classList.remove('hidden');
 
+              // HARD STOP: until YOUR_TURN/ROLL_PROMPT arrives, nobody should see an active Roll button.
+              canRollNow = false;
+              rollBtn.disabled = true;
+              rollBtn.classList.add('btn-disabled');
+              rollBtn.style.display = 'none';
+              rollState.textContent = 'Waiting…';
+              rollState.classList.remove('ok'); 
+              rollState.classList.add('no');
+              // Keep the overlay visible to show the ordered list; the active player’s YOUR_TURN
+              // will call showRollOverlay(...) which re-displays the button.
+              return;
+            }
+
+
               // Do not auto-hide here; YOUR_TURN/ROLL_PROMPT will manage visibility.
               return;
             }
@@ -645,4 +659,5 @@
     </script>
   </body>
 </html>
+
 
