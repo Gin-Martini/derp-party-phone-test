@@ -62,7 +62,7 @@
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
     </style>
-    <script>console.log("DerpPhone v7.9 – phase-guarded roll overlay; TURN_STATE tightened");</script>
+    <script>console.log("DerpPhone v8.0 – Ready wiring + grid delegation (mobile-safe)");</script>
   </head>
   <body>
     <div class="wrap">
@@ -74,8 +74,8 @@
         <label>Name</label>
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
-          <button id="btnJoin" class="btn-primary">Join Room</button>
-          <button id="btnShowRoll" class="btn-accent">Show Roll UI</button>
+          <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
+          <button id="btnShowRoll" class="btn-accent" type="button">Show Roll UI</button>
         </div>
       </div>
 
@@ -103,7 +103,7 @@
 
         <div style="margin:12px 0;display:flex;flex-direction:column;gap:10px;align-items:center">
           <div id="rollValue" style="font-size:42px;line-height:1;font-weight:700;letter-spacing:.02em">—</div>
-          <button id="btnRoll" class="btn-primary">Tap to Roll</button>
+          <button id="btnRoll" class="btn-primary" type="button">Tap to Roll</button>
         </div>
 
         <div id="orderResult" class="hidden" style="margin-top:10px;font-size:14px;color:#c9d1d9"></div>
@@ -145,7 +145,12 @@
       function setStatus(text, pill=false){ const el=$('status'); el.textContent='Status: '+text; el.classList.toggle('pill',pill); }
       function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
       function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
-      function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
+      function enableReadyButton(can){
+        const b=$('btnReady');
+        b.disabled=!can;
+        b.classList.toggle('btn-disabled',!can);
+        setDbg('ready enabled=' + can + ' (hasClass=' + b.classList.contains('btn-disabled') + ')');
+      }
       function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
       function setDbg(x){ const d=$('dbg'); if (d) d.textContent='last: ' + x; }
 
@@ -183,7 +188,6 @@
           btn.className = 'charBtn';
           btn.dataset.charId = id;
           btn.type = 'button';
-          btn.onclick = () => onCharClicked(id);
 
           const portrait = document.createElement('div');
           portrait.className = 'portrait';
@@ -264,21 +268,7 @@
         ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
         log('> PLAYER_READY');
       }
-      
-      // --- Ready button wiring ---
-      $('btnReady').addEventListener('click', () => {
-        const b = $('btnReady');
-        if (b.disabled) { showToast('Pick a character first'); return; }
-        sendReady();
-      }, { passive: true });
-      
-      // (Optional quality-of-life) allow tapping the pill to ready up once you’ve picked
-      $('readyPill').addEventListener('click', () => {
-        const b = $('btnReady');
-        if (!myReady && !b.disabled) sendReady();
-      }, { passive: true });
 
-            
       // ===== Roll UI =====
       const rollPanel = $('turnOrder');
       const rollBtn   = $('btnRoll');
@@ -364,541 +354,578 @@
         }
       }, {passive:true});
 
-  // ===== Join & WS =====
-  $('btnShowRoll').onclick = () => {
-    if (phase !== 'lobby') { showRollOverlay('Test Roll'); showToast('🔧 Test overlay shown'); }
-    else { showToast('Overlay disabled in lobby'); }
-  };
+      // ===== Join & WS =====
+      $('btnShowRoll').onclick = () => {
+        if (phase !== 'lobby') { showRollOverlay('Test Roll'); showToast('🔧 Test overlay shown'); }
+        else { showToast('Overlay disabled in lobby'); }
+      };
 
-  // ---- wrap socket handlers so we can attach after ws is created
-  function attachWsHandlers(sock){
-    sock.onmessage = (ev) => {
-      log('< ' + ev.data);
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'PONG') return;
+      // ---- wrap socket handlers so we can attach after ws is created
+      function attachWsHandlers(sock){
+        sock.onmessage = (ev) => {
+          log('< ' + ev.data);
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'PONG') return;
 
-        // Direct catalog messages
-        if (msg.type === 'CHARACTER_CATALOG') {
-          renderCatalog(msg.entries || msg.list || msg.characters || []);
-          return;
-        }
-
-        const isWrapped = (msg && msg.type === 'STATE' && msg.state);
-        const inner = isWrapped ? msg.state : msg;
-
-        const type = normType(inner.type || msg.type);
-        const payload = inner;
-        setDbg(type || 'unknown');
-
-        if (type === 'TEXT' && payload.message) showToast(payload.message);
-
-        // === TURN-ORDER ===
-        if (type === 'TURN_ORDER_START') {
-          setPhase('turn_order');
-          inTurnOrder = true;
-          playerNameById.clear();
-          const arr = payload.players || payload.order || [];
-          for (const p of arr) if (p && (p.playerId || p.id)) {
-            const pid = p.playerId || p.id;
-            playerNameById.set(pid, p.name || pid);
-          }
-          myHasRolled = false;
-          showRollOverlay('Roll for Turn Order');
-          return;
-        }
-
-        if (type === 'TURN_ORDER_FEEDBACK') {
-          const who  = payload.playerId || payload.id;
-          const roll = (payload.roll != null ? payload.roll : payload.value);
-          if (who === playerId) {
-            myHasRolled = true;
-            rollValue.textContent = String(roll);
-            rollState.textContent = 'Rolled';
-            rollState.classList.add('ok'); rollState.classList.remove('no');
-            rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
-          }
-          return;
-        }
-
-        if (type === 'TURN_ORDER_DONE') {
-          inTurnOrder = false;
-          setPhase('in_game');
-          const ordered = payload.ordered || payload.order || [];
-          const rolls   = payload.rolls || payload.values || {};
-          const lines = ordered.map((pid,i)=>{
-            const name = playerNameById.get(pid) || pid;
-            const me   = (pid === playerId) ? ' (you)' : '';
-            const r    = (rolls && rolls[pid] != null) ? ` — ${rolls[pid]}` : '';
-            return `${i+1}. ${name}${me}${r}`;
-          }).join('<br/>');
-          const box = $('orderResult');
-          box.innerHTML = lines;
-          box.classList.remove('hidden');
-
-          // wait for YOUR_TURN/ROLL_PROMPT to enable rolling
-          canRollNow = false;
-          rollBtn.disabled = true;
-          rollBtn.classList.add('btn-disabled');
-          rollBtn.style.display = 'none';
-          rollState.textContent = 'Waiting…';
-          rollState.classList.remove('ok'); 
-          rollState.classList.add('no');
-          return;
-        }
-
-        // === MAIN GAME TURNS ===
-        if (type === 'YOUR_TURN') {
-          setPhase('in_game');
-          const pid  = (payload.playerId || payload.id || '').trim();
-          const pname = (payload.name || '').trim();
-          const isPidMatch = (pid && pid === playerId);
-          const isNameMatch = (pname && pname === ($('name').value||'').trim());
-          const isMe = isPidMatch || (!isPidMatch && isNameMatch);
-          if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
-
-          canRollNow = isMe;
-          if (isMe) {
-            rollBtn.disabled = false;
-            rollBtn.classList.remove('btn-disabled');
-            rollState.textContent = 'Waiting…';
-            rollState.classList.remove('ok'); rollState.classList.add('no');
-            showRollOverlay('Your Turn — Roll!');
-            showToast('🎲 Your turn! Tap Roll.');
-          } else {
-            hideRollOverlay();
-            showToast('⏳ Waiting for other player…', 1200);
-          }
-          return;
-        }
-
-        if (type === 'ROLL_PROMPT') {
-          setPhase('in_game');
-          const pid  = (payload.playerId || payload.id || '').trim();
-          const pname = (payload.name || '').trim();
-          const isPidMatch = (pid && pid === playerId);
-          const isNameMatch = (pname && pname === ($('name').value||'').trim());
-          const isMe = isPidMatch || (!isPidMatch && isNameMatch);
-
-          if (isMe) {
-            canRollNow = true;
-            rollBtn.disabled = false;
-            rollBtn.classList.remove('btn-disabled');
-            rollState.textContent = 'Waiting…';
-            rollState.classList.remove('ok'); rollState.classList.add('no');
-            showRollOverlay('Your Turn — Roll!');
-            showToast('🎲 Your turn! Tap Roll.');
-          } else {
-            setDbg('ROLL_PROMPT (not me)');
-          }
-          return;
-        }
-
-        if (type === 'MOVE_BEGIN') {
-          if (idsEqual(payload.playerId || payload.id, playerId)) {
-            rollState.textContent = 'Rolled';
-            rollState.classList.add('ok'); rollState.classList.remove('no');
-            rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
-          }
-          return;
-        }
-
-        if (type === 'MOVE_END') {
-          canRollNow = false;
-          hideRollOverlay();
-          return;
-        }
-
-        // === SPACE / COINS feedback ===
-        if (type === 'SPACE_LANDED') {
-          const idx = payload.spaceIndex;
-          const kind = payload.spaceType || 'Unknown';
-          showToast(`🧭 Landed on ${kind} (space ${idx})`);
-          return;
-        }
-        if (type === 'COINS_DELTA') {
-          const d = Number(payload.delta || 0);
-          const total = Number(payload.total || 0);
-          const sign = d > 0 ? '+' : '';
-          showToast(`🪙 Coins ${sign}${d} → ${total}`);
-          return;
-        }
-        if (type === 'SPACE_RESOLVE') {
-          const outcome = payload.outcome || 'Resolved';
-          showToast(`✅ ${outcome}`);
-          return;
-        }
-
-        // ---- STATE snapshots ----
-        if (msg.type === 'STATE') {
-          const s = msg.state || {};
-
-          if (s.type === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
-
-          if (s.type === 'LOBBY_STATE') {
-            setPhase('lobby');
-            hideRollOverlay();
-            const players = s.players||[];
-            const text = players.length
-              ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
-              : '—';
-            setStatus('Lobby: ' + text, true);
-            markTaken(s.taken||[]);
-            return;
-          }
-
-          if (s.type === 'CHARACTER_TAKEN') { takenChars.add(String(s.charId)); markTaken([...takenChars]); return; }
-          if (s.type === 'CHARACTER_PICKED') { applyCharacterPicked(s.playerId, s.charId); return; }
-          if (s.type === 'READY_OPEN')  { showToast('Ready phase open'); return; }
-          if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
-
-          if (s.type === 'LOBBY_LOCKED') {
-            setStatus('Game starting…', true);
-            setReadyPill(false);
-            $('lobbyArea').classList.add('hidden');
-            setPhase('in_game');
-            hideRollOverlay();
-            return;
-          }
-
-          if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
-            if (phase === 'lobby') return;
-            const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
-            if (!pid) return;
-            if (idsEqual(pid, playerId)) {
-              canRollNow = true;
-              showRollOverlay('Your Turn — Roll!');
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
-              rollState.textContent = 'Waiting…';
-              rollState.classList.remove('ok'); rollState.classList.add('no');
+            // Direct catalog messages
+            if (msg.type === 'CHARACTER_CATALOG') {
+              renderCatalog(msg.entries || msg.list || msg.characters || []);
+              return;
             }
+
+            const isWrapped = (msg && msg.type === 'STATE' && msg.state);
+            const inner = isWrapped ? msg.state : msg;
+
+            const type = normType(inner.type || msg.type);
+            const payload = inner;
+            setDbg(type || 'unknown');
+
+            if (type === 'TEXT' && payload.message) showToast(payload.message);
+
+            // === TURN-ORDER ===
+            if (type === 'TURN_ORDER_START') {
+              setPhase('turn_order');
+              inTurnOrder = true;
+              playerNameById.clear();
+              const arr = payload.players || payload.order || [];
+              for (const p of arr) if (p && (p.playerId || p.id)) {
+                const pid = p.playerId || p.id;
+                playerNameById.set(pid, p.name || pid);
+              }
+              myHasRolled = false;
+              showRollOverlay('Roll for Turn Order');
+              return;
+            }
+
+            if (type === 'TURN_ORDER_FEEDBACK') {
+              const who  = payload.playerId || payload.id;
+              const roll = (payload.roll != null ? payload.roll : payload.value);
+              if (who === playerId) {
+                myHasRolled = true;
+                rollValue.textContent = String(roll);
+                rollState.textContent = 'Rolled';
+                rollState.classList.add('ok'); rollState.classList.remove('no');
+                rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
+              }
+              return;
+            }
+
+            if (type === 'TURN_ORDER_DONE') {
+              inTurnOrder = false;
+              setPhase('in_game');
+              const ordered = payload.ordered || payload.order || [];
+              const rolls   = payload.rolls || payload.values || {};
+              const lines = ordered.map((pid,i)=>{
+                const name = playerNameById.get(pid) || pid;
+                const me   = (pid === playerId) ? ' (you)' : '';
+                const r    = (rolls && rolls[pid] != null) ? ` — ${rolls[pid]}` : '';
+                return `${i+1}. ${name}${me}${r}`;
+              }).join('<br/>');
+              const box = $('orderResult');
+              box.innerHTML = lines;
+              box.classList.remove('hidden');
+
+              // wait for YOUR_TURN/ROLL_PROMPT to enable rolling
+              canRollNow = false;
+              rollBtn.disabled = true;
+              rollBtn.classList.add('btn-disabled');
+              rollBtn.style.display = 'none';
+              rollState.textContent = 'Waiting…';
+              rollState.classList.remove('ok'); 
+              rollState.classList.add('no');
+              return;
+            }
+
+            // === MAIN GAME TURNS ===
+            if (type === 'YOUR_TURN') {
+              setPhase('in_game');
+              const pid  = (payload.playerId || payload.id || '').trim();
+              const pname = (payload.name || '').trim();
+              const isPidMatch = (pid && pid === playerId);
+              const isNameMatch = (pname && pname === ($('name').value||'').trim());
+              const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+              if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
+
+              canRollNow = isMe;
+              if (isMe) {
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                hideRollOverlay();
+                showToast('⏳ Waiting for other player…', 1200);
+              }
+              return;
+            }
+
+            if (type === 'ROLL_PROMPT') {
+              setPhase('in_game');
+              const pid  = (payload.playerId || payload.id || '').trim();
+              const pname = (payload.name || '').trim();
+              const isPidMatch = (pid && pid === playerId);
+              const isNameMatch = (pname && pname === ($('name').value||'').trim());
+              const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+
+              if (isMe) {
+                canRollNow = true;
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                setDbg('ROLL_PROMPT (not me)');
+              }
+              return;
+            }
+
+            if (type === 'MOVE_BEGIN') {
+              if (idsEqual(payload.playerId || payload.id, playerId)) {
+                rollState.textContent = 'Rolled';
+                rollState.classList.add('ok'); rollState.classList.remove('no');
+                rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
+              }
+              return;
+            }
+
+            if (type === 'MOVE_END') {
+              canRollNow = false;
+              hideRollOverlay();
+              return;
+            }
+
+            // === SPACE / COINS feedback ===
+            if (type === 'SPACE_LANDED') {
+              const idx = payload.spaceIndex;
+              const kind = payload.spaceType || 'Unknown';
+              showToast(`🧭 Landed on ${kind} (space ${idx})`);
+              return;
+            }
+            if (type === 'COINS_DELTA') {
+              const d = Number(payload.delta || 0);
+              const total = Number(payload.total || 0);
+              const sign = d > 0 ? '+' : '';
+              showToast(`🪙 Coins ${sign}${d} → ${total}`);
+              return;
+            }
+            if (type === 'SPACE_RESOLVE') {
+              const outcome = payload.outcome || 'Resolved';
+              showToast(`✅ ${outcome}`);
+              return;
+            }
+
+            // ---- STATE snapshots ----
+            if (msg.type === 'STATE') {
+              const s = msg.state || {};
+
+              if (s.type === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
+
+              if (s.type === 'LOBBY_STATE') {
+                setPhase('lobby');
+                hideRollOverlay();
+                const players = s.players||[];
+                const text = players.length
+                  ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
+                  : '—';
+                setStatus('Lobby: ' + text, true);
+                markTaken(s.taken||[]);
+                return;
+              }
+
+              if (s.type === 'CHARACTER_TAKEN') { takenChars.add(String(s.charId)); markTaken([...takenChars]); return; }
+              if (s.type === 'CHARACTER_PICKED') { applyCharacterPicked(s.playerId, s.charId); return; }
+              if (s.type === 'READY_OPEN')  { showToast('Ready phase open'); return; }
+              if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
+
+              if (s.type === 'LOBBY_LOCKED') {
+                setStatus('Game starting…', true);
+                setReadyPill(false);
+                $('lobbyArea').classList.add('hidden');
+                setPhase('in_game');
+                hideRollOverlay();
+                return;
+              }
+
+              if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
+                if (phase === 'lobby') return;
+                const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
+                if (!pid) return;
+                if (idsEqual(pid, playerId)) {
+                  canRollNow = true;
+                  showRollOverlay('Your Turn — Roll!');
+                  rollBtn.disabled = false;
+                  rollBtn.classList.remove('btn-disabled');
+                  rollState.textContent = 'Waiting…';
+                  rollState.classList.remove('ok'); rollState.classList.add('no');
+                }
+                return;
+              }
+
+              if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
+            }
+          } catch(e) { console.error(e); }
+        };
+
+        sock.onclose = () => {
+          log('WS closed.');
+          setStatus('Disconnected');
+          setLobbyVisible(false);
+          $('joinCard').classList.remove('hidden');
+          clearInterval(hbInterval);
+          myReady = false; myCharId = null; takenChars.clear();
+          $('charGrid').innerHTML = '';
+          enableReadyButton(false);
+          setReadyPill(false);
+          canRollNow = false; inTurnOrder = false; myHasRolled = false;
+          setPhase('lobby');
+          const panel = $('turnOrder');
+          if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
+          setDbg('WS closed');
+        };
+      }
+
+      // --- Character grid delegation (mobile-safe). Bind once.
+      (() => {
+        const grid = $('charGrid');
+        if (!grid) return;
+        grid.addEventListener('click', (e) => {
+          const btn = e.target.closest('.charBtn');
+          if (!btn || !grid.contains(btn)) return;
+          const id = btn.dataset.charId;
+          if (!id) return;
+          onCharClicked(id);
+        }, { passive: true });
+      })();
+
+      // --- Ready button wiring (mobile-safe). Bind once.
+      (() => {
+        const readyBtn = $('btnReady');
+        if (!readyBtn) { console.error('#btnReady not found'); return; }
+        readyBtn.addEventListener('click', () => {
+          if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
+            if (!myCharId) showToast('Pick a character first');
+            else showToast('Still waiting for lobby to open');
             return;
           }
+          showToast('✅ Sending READY…');
+          sendReady();
+        }, { passive: true });
 
-          if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
+        const pill = $('readyPill');
+        if (pill) {
+          pill.addEventListener('click', () => {
+            if (!myReady && !readyBtn.disabled && !readyBtn.classList.contains('btn-disabled')) {
+              sendReady();
+            }
+          }, { passive: true });
         }
-      } catch(e) { console.error(e); }
-    };
+      })();
 
-    sock.onclose = () => {
-      log('WS closed.');
-      setStatus('Disconnected');
-      setLobbyVisible(false);
-      $('joinCard').classList.remove('hidden');
-      clearInterval(hbInterval);
-      myReady = false; myCharId = null; takenChars.clear();
-      $('charGrid').innerHTML = '';
-      enableReadyButton(false);
-      setReadyPill(false);
-      canRollNow = false; inTurnOrder = false; myHasRolled = false;
-      setPhase('lobby');
-      const panel = $('turnOrder');
-      if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
-      setDbg('WS closed');
-    };
-  }
+      $('btnJoin').onclick = async () => {
+        // 1) Read inputs
+        roomId = ($('room').value || '').trim().toUpperCase();
+        const name = ($('name').value || '').trim() || 'Player';
+        if (!roomId) { alert('Enter room code.'); return; }
 
-$('btnJoin').onclick = async () => {
-  // 1) Read inputs
-  roomId = ($('room').value || '').trim().toUpperCase();
-  const name = ($('name').value || '').trim() || 'Player';
-  if (!roomId) { alert('Enter room code.'); return; }
+        setStatus('Joining…', true);
 
-  setStatus('Joining…', true);
-
-  // 2) HTTP join (send JSON body + content-type)
-  try {
-    const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '<no body>');
-      log(`Join HTTP failed: ${resp.status} ${txt}`);
-      setStatus(`Join failed (${resp.status})`);
-      showToast('Could not join room. Check code/capacity.');
-      return;
-    }
-    const j = await resp.json().catch(() => ({}));
-    playerId = j.playerId || j.id || '';
-    if (!playerId) {
-      log('Join response missing playerId: ' + JSON.stringify(j));
-      setStatus('Join failed (no playerId)');
-      showToast('Join failed: bad server response.');
-      return;
-    }
-    log('Got playerId: ' + playerId);
-  } catch (e) {
-    log('HTTP error: ' + e);
-    setStatus('HTTP error');
-    showToast('Network error while joining.');
-    return;
-  }
-
-  // 3) Open WebSocket only after successful join
-  try {
-    ws = new WebSocket(WS_URL);
-  } catch (e) {
-    log('WS construct error: ' + e);
-    setStatus('WebSocket error');
-    return;
-  }
-
-  ws.onopen = () => {
-    log('WS open.');
-    setPhase('lobby');
-    ws.send(JSON.stringify({ type: 'HELLO_PLAYER', roomId, playerId, name }));
-    setStatus('Connected. In Lobby.', true);
-    $('joinCard').classList.add('hidden');
-    setLobbyVisible(true);
-    ensureGridVisible();
-
-    clearInterval(hbInterval);
-    hbInterval = setInterval(() => {
-      try { ws.readyState === 1 && ws.send(JSON.stringify({ type: 'PING' })); } catch (_) {}
-    }, 5000);
-  };
-
-  ws.onmessage = (ev) => {
-    log('< ' + ev.data);
-    try {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'PONG') return;
-
-      // direct catalog
-      if (msg.type === 'CHARACTER_CATALOG') {
-        renderCatalog(msg.entries || msg.list || msg.characters || []);
-        return;
-      }
-
-      const isWrapped = (msg && msg.type === 'STATE' && msg.state);
-      const inner = isWrapped ? msg.state : msg;
-      const type = normType(inner.type || msg.type);
-      const payload = inner;
-      setDbg(type || 'unknown');
-
-      if (type === 'TEXT' && payload.message) showToast(payload.message);
-
-      // === TURN-ORDER ===
-      if (type === 'TURN_ORDER_START') {
-        setPhase('turn_order');
-        inTurnOrder = true;
-        playerNameById.clear();
-        const arr = payload.players || payload.order || [];
-        for (const p of arr) if (p && (p.playerId || p.id)) {
-          const pid = p.playerId || p.id;
-          playerNameById.set(pid, p.name || pid);
-        }
-        myHasRolled = false;
-        showRollOverlay('Roll for Turn Order');
-        return;
-      }
-
-      if (type === 'TURN_ORDER_FEEDBACK') {
-        const who  = payload.playerId || payload.id;
-        const roll = (payload.roll != null ? payload.roll : payload.value);
-        if (who === playerId) {
-          myHasRolled = true;
-          rollValue.textContent = String(roll);
-          rollState.textContent = 'Rolled';
-          rollState.classList.add('ok'); rollState.classList.remove('no');
-          rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
-        }
-        return;
-      }
-
-      if (type === 'TURN_ORDER_DONE') {
-        inTurnOrder = false;
-        setPhase('in_game');
-        const ordered = payload.ordered || payload.order || [];
-        const rolls   = payload.rolls || payload.values || {};
-        const lines = ordered.map((pid,i)=>{
-          const name = playerNameById.get(pid) || pid;
-          const me   = (pid === playerId) ? ' (you)' : '';
-          const r    = (rolls && rolls[pid] != null) ? ` — ${rolls[pid]}` : '';
-          return `${i+1}. ${name}${me}${r}`;
-        }).join('<br/>');
-        const box = $('orderResult');
-        box.innerHTML = lines;
-        box.classList.remove('hidden');
-
-        // don’t show roll button until YOUR_TURN/ROLL_PROMPT
-        canRollNow = false;
-        rollBtn.disabled = true;
-        rollBtn.classList.add('btn-disabled');
-        rollBtn.style.display = 'none';
-        rollState.textContent = 'Waiting…';
-        rollState.classList.remove('ok'); 
-        rollState.classList.add('no');
-        return;
-      }
-
-      // === MAIN GAME TURNS ===
-      if (type === 'YOUR_TURN') {
-        setPhase('in_game');
-        const pid  = (payload.playerId || payload.id || '').trim();
-        const pname = (payload.name || '').trim();
-        const isPidMatch = (pid && pid === playerId);
-        const isNameMatch = (pname && pname === ($('name').value||'').trim());
-        const isMe = isPidMatch || (!isPidMatch && isNameMatch);
-
-        if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
-
-        canRollNow = isMe;
-        if (isMe) {
-          rollBtn.disabled = false;
-          rollBtn.classList.remove('btn-disabled');
-          rollState.textContent = 'Waiting…';
-          rollState.classList.remove('ok'); rollState.classList.add('no');
-          showRollOverlay('Your Turn — Roll!');
-          showToast('🎲 Your turn! Tap Roll.');
-        } else {
-          hideRollOverlay();
-          showToast('⏳ Waiting for other player…', 1200);
-        }
-        return;
-      }
-
-      if (type === 'ROLL_PROMPT') {
-        setPhase('in_game');
-        const pid  = (payload.playerId || payload.id || '').trim();
-        const pname = (payload.name || '').trim();
-        const isPidMatch = (pid && pid === playerId);
-        const isNameMatch = (pname && pname === ($('name').value||'').trim());
-        const isMe = isPidMatch || (!isPidMatch && isNameMatch);
-
-        if (isMe) {
-          canRollNow = true;
-          rollBtn.disabled = false;
-          rollBtn.classList.remove('btn-disabled');
-          rollState.textContent = 'Waiting…';
-          rollState.classList.remove('ok'); rollState.classList.add('no');
-          showRollOverlay('Your Turn — Roll!');
-          showToast('🎲 Your turn! Tap Roll.');
-        } else {
-          setDbg('ROLL_PROMPT (not me)');
-        }
-        return;
-      }
-
-      if (type === 'MOVE_BEGIN') {
-        if (idsEqual(payload.playerId || payload.id, playerId)) {
-          rollState.textContent = 'Rolled';
-          rollState.classList.add('ok'); rollState.classList.remove('no');
-          rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
-        }
-        return;
-      }
-
-      if (type === 'MOVE_END') {
-        canRollNow = false;
-        hideRollOverlay();
-        return;
-      }
-
-      // === SPACE / COINS feedback ===
-      if (type === 'SPACE_LANDED') {
-        const idx = payload.spaceIndex;
-        const kind = payload.spaceType || 'Unknown';
-        showToast(`🧭 Landed on ${kind} (space ${idx})`);
-        return;
-      }
-      if (type === 'COINS_DELTA') {
-        const d = Number(payload.delta || 0);
-        const total = Number(payload.total || 0);
-        const sign = d > 0 ? '+' : '';
-        showToast(`🪙 Coins ${sign}${d} → ${total}`);
-        return;
-      }
-      if (type === 'SPACE_RESOLVE') {
-        const outcome = payload.outcome || 'Resolved';
-        showToast(`✅ ${outcome}`);
-        return;
-      }
-
-      // ---- STATE snapshots ----
-      if (msg.type === 'STATE') {
-        const s = msg.state || {};
-
-        if (s.type === 'CHARACTER_CATALOG') {
-          renderCatalog(s.entries||[]);
-          return;
-        }
-
-        if (s.type === 'LOBBY_STATE') {
-          setPhase('lobby');
-          hideRollOverlay();
-          const players = s.players||[];
-          const text = players.length
-            ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
-            : '—';
-          setStatus('Lobby: ' + text, true);
-          markTaken(s.taken||[]);
-          return;
-        }
-
-        if (s.type === 'CHARACTER_TAKEN') {
-          takenChars.add(String(s.charId));
-          markTaken([...takenChars]);
-          return;
-        }
-
-        if (s.type === 'CHARACTER_PICKED') {
-          applyCharacterPicked(s.playerId, s.charId);
-          return;
-        }
-
-        if (s.type === 'READY_OPEN')  { showToast('Ready phase open'); return; }
-        if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
-
-        if (s.type === 'LOBBY_LOCKED') {
-          setStatus('Game starting…', true);
-          setReadyPill(false);
-          $('lobbyArea').classList.add('hidden');
-          setPhase('in_game');
-          hideRollOverlay();
-          return;
-        }
-
-        if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
-          if (phase === 'lobby') return;
-          const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
-          if (!pid) return;
-          if (idsEqual(pid, playerId)) {
-            canRollNow = true;
-            showRollOverlay('Your Turn — Roll!');
-            rollBtn.disabled = false;
-            rollBtn.classList.remove('btn-disabled');
-            rollState.textContent = 'Waiting…';
-            rollState.classList.remove('ok'); rollState.classList.add('no');
+        // 2) HTTP join (send JSON body + content-type)
+        try {
+          const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name }),
+          });
+          if (!resp.ok) {
+            const txt = await resp.text().catch(() => '<no body>');
+            log(`Join HTTP failed: ${resp.status} ${txt}`);
+            setStatus(`Join failed (${resp.status})`);
+            showToast('Could not join room. Check code/capacity.');
+            return;
           }
+          const j = await resp.json().catch(() => ({}));
+          playerId = j.playerId || j.id || '';
+          if (!playerId) {
+            log('Join response missing playerId: ' + JSON.stringify(j));
+            setStatus('Join failed (no playerId)');
+            showToast('Join failed: bad server response.');
+            return;
+          }
+          log('Got playerId: ' + playerId);
+        } catch (e) {
+          log('HTTP error: ' + e);
+          setStatus('HTTP error');
+          showToast('Network error while joining.');
           return;
         }
 
-        if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
-      }
-    } catch(e) { console.error(e); }
-  };
+        // 3) Open WebSocket only after successful join
+        try {
+          ws = new WebSocket(WS_URL);
+        } catch (e) {
+          log('WS construct error: ' + e);
+          setStatus('WebSocket error');
+          return;
+        }
 
-  ws.onclose = () => {
-    log('WS closed.');
-    setStatus('Disconnected');
-    setLobbyVisible(false);
-    $('joinCard').classList.remove('hidden');
-    clearInterval(hbInterval);
-    myReady = false; myCharId = null; takenChars.clear();
-    $('charGrid').innerHTML = '';
-    enableReadyButton(false);
-    setReadyPill(false);
-    canRollNow = false; inTurnOrder = false; myHasRolled = false;
-    setPhase('lobby');
-    const panel = $('turnOrder');
-    if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
-    setDbg('WS closed');
-  };
-};
-</script>
+        ws.onopen = () => {
+          log('WS open.');
+          setPhase('lobby');
+          ws.send(JSON.stringify({ type: 'HELLO_PLAYER', roomId, playerId, name }));
+          setStatus('Connected. In Lobby.', true);
+          $('joinCard').classList.add('hidden');
+          setLobbyVisible(true);
+          ensureGridVisible();
 
+          clearInterval(hbInterval);
+          hbInterval = setInterval(() => {
+            try { ws.readyState === 1 && ws.send(JSON.stringify({ type: 'PING' })); } catch (_) {}
+          }, 5000);
+        };
 
+        ws.onmessage = (ev) => {
+          log('< ' + ev.data);
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'PONG') return;
+
+            // direct catalog
+            if (msg.type === 'CHARACTER_CATALOG') {
+              renderCatalog(msg.entries || msg.list || msg.characters || []);
+              return;
+            }
+
+            const isWrapped = (msg && msg.type === 'STATE' && msg.state);
+            const inner = isWrapped ? msg.state : msg;
+            const type = normType(inner.type || msg.type);
+            const payload = inner;
+            setDbg(type || 'unknown');
+
+            if (type === 'TEXT' && payload.message) showToast(payload.message);
+
+            // === TURN-ORDER ===
+            if (type === 'TURN_ORDER_START') {
+              setPhase('turn_order');
+              inTurnOrder = true;
+              playerNameById.clear();
+              const arr = payload.players || payload.order || [];
+              for (const p of arr) if (p && (p.playerId || p.id)) {
+                const pid = p.playerId || p.id;
+                playerNameById.set(pid, p.name || pid);
+              }
+              myHasRolled = false;
+              showRollOverlay('Roll for Turn Order');
+              return;
+            }
+
+            if (type === 'TURN_ORDER_FEEDBACK') {
+              const who  = payload.playerId || payload.id;
+              const roll = (payload.roll != null ? payload.roll : payload.value);
+              if (who === playerId) {
+                myHasRolled = true;
+                rollValue.textContent = String(roll);
+                rollState.textContent = 'Rolled';
+                rollState.classList.add('ok'); rollState.classList.remove('no');
+                rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
+              }
+              return;
+            }
+
+            if (type === 'TURN_ORDER_DONE') {
+              inTurnOrder = false;
+              setPhase('in_game');
+              const ordered = payload.ordered || payload.order || [];
+              const rolls   = payload.rolls || payload.values || {};
+              const lines = ordered.map((pid,i)=>{
+                const name = playerNameById.get(pid) || pid;
+                const me   = (pid === playerId) ? ' (you)' : '';
+                const r    = (rolls && rolls[pid] != null) ? ` — ${rolls[pid]}` : '';
+                return `${i+1}. ${name}${me}${r}`;
+              }).join('<br/>');
+              const box = $('orderResult');
+              box.innerHTML = lines;
+              box.classList.remove('hidden');
+
+              // don’t show roll button until YOUR_TURN/ROLL_PROMPT
+              canRollNow = false;
+              rollBtn.disabled = true;
+              rollBtn.classList.add('btn-disabled');
+              rollBtn.style.display = 'none';
+              rollState.textContent = 'Waiting…';
+              rollState.classList.remove('ok'); 
+              rollState.classList.add('no');
+              return;
+            }
+
+            // === MAIN GAME TURNS ===
+            if (type === 'YOUR_TURN') {
+              setPhase('in_game');
+              const pid  = (payload.playerId || payload.id || '').trim();
+              const pname = (payload.name || '').trim();
+              const isPidMatch = (pid && pid === playerId);
+              const isNameMatch = (pname && pname === ($('name').value||'').trim());
+              const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+
+              if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
+
+              canRollNow = isMe;
+              if (isMe) {
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                hideRollOverlay();
+                showToast('⏳ Waiting for other player…', 1200);
+              }
+              return;
+            }
+
+            if (type === 'ROLL_PROMPT') {
+              setPhase('in_game');
+              const pid  = (payload.playerId || payload.id || '').trim();
+              const pname = (payload.name || '').trim();
+              const isPidMatch = (pid && pid === playerId);
+              const isNameMatch = (pname && pname === ($('name').value||'').trim());
+              const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+
+              if (isMe) {
+                canRollNow = true;
+                rollBtn.disabled = false;
+                rollBtn.classList.remove('btn-disabled');
+                rollState.textContent = 'Waiting…';
+                rollState.classList.remove('ok'); rollState.classList.add('no');
+                showRollOverlay('Your Turn — Roll!');
+                showToast('🎲 Your turn! Tap Roll.');
+              } else {
+                setDbg('ROLL_PROMPT (not me)');
+              }
+              return;
+            }
+
+            if (type === 'MOVE_BEGIN') {
+              if (idsEqual(payload.playerId || payload.id, playerId)) {
+                rollState.textContent = 'Rolled';
+                rollState.classList.add('ok'); rollState.classList.remove('no');
+                rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
+              }
+              return;
+            }
+
+            if (type === 'MOVE_END') {
+              canRollNow = false;
+              hideRollOverlay();
+              return;
+            }
+
+            // === SPACE / COINS feedback ===
+            if (type === 'SPACE_LANDED') {
+              const idx = payload.spaceIndex;
+              const kind = payload.spaceType || 'Unknown';
+              showToast(`🧭 Landed on ${kind} (space ${idx})`);
+              return;
+            }
+            if (type === 'COINS_DELTA') {
+              const d = Number(payload.delta || 0);
+              const total = Number(payload.total || 0);
+              const sign = d > 0 ? '+' : '';
+              showToast(`🪙 Coins ${sign}${d} → ${total}`);
+              return;
+            }
+            if (type === 'SPACE_RESOLVE') {
+              const outcome = payload.outcome || 'Resolved';
+              showToast(`✅ ${outcome}`);
+              return;
+            }
+
+            // ---- STATE snapshots ----
+            if (msg.type === 'STATE') {
+              const s = msg.state || {};
+
+              if (s.type === 'CHARACTER_CATALOG') {
+                renderCatalog(s.entries||[]);
+                return;
+              }
+
+              if (s.type === 'LOBBY_STATE') {
+                setPhase('lobby');
+                hideRollOverlay();
+                const players = s.players||[];
+                const text = players.length
+                  ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
+                  : '—';
+                setStatus('Lobby: ' + text, true);
+                markTaken(s.taken||[]);
+                return;
+              }
+
+              if (s.type === 'CHARACTER_TAKEN') {
+                takenChars.add(String(s.charId));
+                markTaken([...takenChars]);
+                return;
+              }
+
+              if (s.type === 'CHARACTER_PICKED') {
+                applyCharacterPicked(s.playerId, s.charId);
+                return;
+              }
+
+              if (s.type === 'READY_OPEN')  { showToast('Ready phase open'); return; }
+              if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
+
+              if (s.type === 'LOBBY_LOCKED') {
+                setStatus('Game starting…', true);
+                setReadyPill(false);
+                $('lobbyArea').classList.add('hidden');
+                setPhase('in_game');
+                hideRollOverlay();
+                return;
+              }
+
+              if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
+                if (phase === 'lobby') return;
+                const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
+                if (!pid) return;
+                if (idsEqual(pid, playerId)) {
+                  canRollNow = true;
+                  showRollOverlay('Your Turn — Roll!');
+                  rollBtn.disabled = false;
+                  rollBtn.classList.remove('btn-disabled');
+                  rollState.textContent = 'Waiting…';
+                  rollState.classList.remove('ok'); rollState.classList.add('no');
+                }
+                return;
+              }
+
+              if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
+            }
+          } catch(e) { console.error(e); }
+        };
+
+        ws.onclose = () => {
+          log('WS closed.');
+          setStatus('Disconnected');
+          setLobbyVisible(false);
+          $('joinCard').classList.remove('hidden');
+          clearInterval(hbInterval);
+          myReady = false; myCharId = null; takenChars.clear();
+          $('charGrid').innerHTML = '';
+          enableReadyButton(false);
+          setReadyPill(false);
+          canRollNow = false; inTurnOrder = false; myHasRolled = false;
+          setPhase('lobby');
+          const panel = $('turnOrder');
+          if (panel) { panel.classList.add('hidden'); panel.style.display=''; }
+          setDbg('WS closed');
+        };
+      };
+    </script>
+  </body>
+</html>
