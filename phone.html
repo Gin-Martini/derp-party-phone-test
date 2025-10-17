@@ -274,6 +274,14 @@
         try{ ws && ws.readyState===1 && ws.send(JSON.stringify(obj)); }catch(_){ /*no-op*/ }
       }
 
+      // Bridge both modern + legacy intent paths so host sees OnPlayerIntentEvt.
+      function sendIntent(intentType, value){
+        // Legacy intent envelope some hosts expect:
+        wsSend({ type:'INTENT', intent:intentType, value:String(value) });
+        // Also emit a typed packet to satisfy DTO handlers (MsgTriviaAnswer):
+        wsSend({ type:intentType, optionIndex:Number(value) });
+      }
+            
       function normType(t){
         if(!t) return t;
         const m = {
@@ -661,3 +669,4 @@
     </script>
   </body>
 </html>
+
