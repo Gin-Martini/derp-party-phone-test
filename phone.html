@@ -264,14 +264,20 @@
         ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
         log('> PLAYER_READY');
       }
-
-      // Enable the Ready button to actually send the signal
+      
+      // --- Ready button wiring ---
       $('btnReady').addEventListener('click', () => {
-        // guard against accidental taps while disabled
         const b = $('btnReady');
-        if (b.disabled) return;
+        if (b.disabled) { showToast('Pick a character first'); return; }
         sendReady();
       }, { passive: true });
+      
+      // (Optional quality-of-life) allow tapping the pill to ready up once you’ve picked
+      $('readyPill').addEventListener('click', () => {
+        const b = $('btnReady');
+        if (!myReady && !b.disabled) sendReady();
+      }, { passive: true });
+
             
       // ===== Roll UI =====
       const rollPanel = $('turnOrder');
@@ -894,4 +900,5 @@ $('btnJoin').onclick = async () => {
   };
 };
 </script>
+
 
