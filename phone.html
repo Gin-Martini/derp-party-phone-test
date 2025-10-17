@@ -61,8 +61,11 @@
         font:12px/1.2 system-ui, sans-serif; color:#cbd5e1; background:#0b0b0d; border:1px solid #282a36;
         border-radius:10px; padding:6px 8px; opacity:.85;
       }
+
+      /* Trivia pad buttons */
+      .tp-btn { font-size:22px;font-weight:700; letter-spacing:.02em; }
     </style>
-    <script>console.log("DerpPhone v9.0 – unified state machine + DRY socket handlers");</script>
+    <script>console.log("DerpPhone v9.1 – trivia pad controls only (no question on phone)");</script>
   </head>
   <body>
     <div class="wrap">
@@ -269,19 +272,75 @@
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
 
+      // ---- Trivia Pad (controls only, no question) ----
+      let triviaPadEl = null, triviaPadButtons = [];
+      function ensureTriviaPad(){
+        if (triviaPadEl) return triviaPadEl;
+        const pad = document.createElement('div');
+        pad.id = 'triviaPad';
+        pad.style.cssText = `
+          position:fixed; inset:0; z-index:10010; display:none;
+          background:rgba(0,0,0,.5);
+        `;
+        pad.innerHTML = `
+          <div style="
+            position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+            width:min(520px,92%); background:#141418; border:1px solid #2a2a32;
+            border-radius:16px; padding:16px; display:flex;flex-direction:column; gap:12px;
+          ">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div class="pill">Trivia — choose</div>
+              <button id="tpClose" type="button" style="background:#1f2937;border:1px solid #374151;color:#e5e7eb;padding:6px 10px;border-radius:10px">Hide</button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <button class="tp-btn btn-primary" id="tpA" type="button">A</button>
+              <button class="tp-btn btn-primary" id="tpB" type="button">B</button>
+              <button class="tp-btn btn-primary" id="tpC" type="button">C</button>
+              <button class="tp-btn btn-primary" id="tpD" type="button">D</button>
+            </div>
+            <div style="font-size:12px;color:#9aa0a6">Answers lock after you tap.</div>
+          </div>`;
+        document.body.appendChild(pad);
+        pad.querySelector('#tpClose').addEventListener('click', ()=>{ pad.style.display='none'; }, { passive:true });
+
+        const btnA = pad.querySelector('#tpA');
+        const btnB = pad.querySelector('#tpB');
+        const btnC = pad.querySelector('#tpC');
+        const btnD = pad.querySelector('#tpD');
+        triviaPadButtons = [btnA, btnB, btnC, btnD];
+        triviaPadButtons.forEach((b, i)=>{
+          b.addEventListener('click', ()=>{
+            // lock after tap
+            triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
+            sendIntent('TRIVIA_ANSWER', i);
+            showToast('✅ Answer sent');
+          }, { passive:true });
+        });
+
+        triviaPadEl = pad;
+        return pad;
+      }
+      function showTriviaPad(){
+        const pad = ensureTriviaPad();
+        triviaPadButtons.forEach(bb=>{ bb.disabled = false; bb.classList.remove('btn-disabled'); });
+        pad.style.display = 'block';
+      }
+      function endTriviaPad(){
+        if (!triviaPadEl) return;
+        triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
+        setTimeout(()=>{ if (triviaPadEl) triviaPadEl.style.display='none'; }, 600);
+      }
+
       // ======== Net helpers ========
       function wsSend(obj){
         try{ ws && ws.readyState===1 && ws.send(JSON.stringify(obj)); }catch(_){ /*no-op*/ }
       }
-
-      // Bridge both modern + legacy intent paths so host sees OnPlayerIntentEvt.
+      // Send intents in both envelopes to maximize server compatibility.
       function sendIntent(intentType, value){
-        // Legacy intent envelope some hosts expect:
-        wsSend({ type:'INTENT', intent:intentType, value:String(value) });
-        // Also emit a typed packet to satisfy DTO handlers (MsgTriviaAnswer):
-        wsSend({ type:intentType, optionIndex:Number(value) });
+        wsSend({ type:'INTENT', intent:intentType, value:String(value) });       // legacy
+        wsSend({ type:intentType, optionIndex:Number(value) });                  // typed DTO
       }
-            
+
       function normType(t){
         if(!t) return t;
         const m = {
@@ -470,6 +529,21 @@
             return;
           }
 
+          // === TRIVIA (controls only) ===
+          if (type === 'TRIVIA_START') {
+            // We intentionally do NOT show the question here; host displays the content.
+            showTriviaPad();
+            return;
+          }
+          if (type === 'TRIVIA_END') {
+            endTriviaPad();
+            // Optional: show winner toast (host also broadcasts coins delta separately)
+            if (payload && payload.winnerId) {
+              showToast(`🏆 ${payload.winnerId} won +${Number(payload.awarded||0)}`);
+            }
+            return;
+          }
+
           // ---- STATE snapshots ----
           if (msg.type === 'STATE') {
             const s = msg.state || {};
@@ -550,6 +624,7 @@
           canRollNow = false; inTurnOrder = false; myHasRolled = false;
           setPhase('lobby');
           if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
+          if (triviaPadEl) triviaPadEl.style.display='none';
           setDbg('WS closed');
         };
       }
@@ -669,4 +744,3 @@
     </script>
   </body>
 </html>
-
