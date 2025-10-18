@@ -285,7 +285,7 @@
   function computeTriviaEligibility(payload){
     if (!payload || typeof payload !== 'object') {
       triviaMode = 'PENDING';
-      return null;
+      return false;
     }
 
     if (!hasTriviaHints(payload)) {
@@ -344,6 +344,9 @@
     ];
     const allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
 
+    const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
+    const explicitAllowAll = allowAllFlags.some((v) => v === true || String(v).toLowerCase() === 'all');
+
     const soloHintSources = [
       payload.soloPlayerId,
       payload.targetPlayerId,
@@ -373,8 +376,10 @@
       else if (isFfaFlag) resolvedMode = 'FFA';
     }
     if (!resolvedMode) {
-      if (soloHints.length > 0 || fallbackIds.length > 0 || allowedIds.length === 1) resolvedMode = 'SOLO';
-      else resolvedMode = 'FFA';
+      if (explicitAllowAll) resolvedMode = 'FFA';
+      else if (soloHints.length > 0 || fallbackIds.length > 0 || allowedIds.length === 1) resolvedMode = 'SOLO';
+      else if (allowedIds.length > 1) resolvedMode = 'FFA';
+      else resolvedMode = 'SOLO';
     }
 
     triviaMode = resolvedMode;
@@ -392,7 +397,8 @@
     }
 
     if (allowedIds.length > 0) return isAllowed(allowedIds);
-    return true;
+    if (explicitAllowAll) return true;
+    return false;
   }
 
   function hasTriviaHints(payload) {
