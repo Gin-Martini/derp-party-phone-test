@@ -287,20 +287,92 @@
 
   // === SOLO/FFA gating helpers ===
   function computeTriviaEligibility(payload){
-    if (!payload) return true;
-    const mode = String(payload.mode || payload.triviaMode || '').toUpperCase();
-    const allowed = payload.allowed || payload.allow || payload.participants || [];
-    const soloId = payload.soloPlayerId || payload.playerId || payload.activePlayerId || '';
-
-    triviaMode = (mode === 'SOLO') ? 'SOLO' : 'FFA';
-
-    if (Array.isArray(allowed) && allowed.length > 0) {
-      return allowed.some(id => idsEqual(id, playerId));
+    if (!payload) {
+      triviaMode = 'FFA';
+      return true;
     }
+
+    const collectIds = (raw) => {
+      if (raw == null) return [];
+      if (Array.isArray(raw)) {
+        return raw.flatMap(item => collectIds(item)).filter(Boolean);
+      }
+      if (typeof raw === 'object') {
+        const candidate = raw.playerId || raw.id || raw.value || raw.key || raw.targetPlayerId || raw.soloPlayerId;
+        if (candidate != null) return collectIds(candidate);
+
+        const keys = Object.keys(raw);
+        if (!keys.length) return [];
+        const looksLikeBoolMap = keys.every(k => typeof raw[k] === 'boolean');
+        if (looksLikeBoolMap) return keys;
+        return keys.flatMap(k => collectIds(raw[k])).filter(Boolean);
+      }
+      if (typeof raw === 'string') {
+        if (!raw.trim()) return [];
+        if (raw.includes(',')) return raw.split(',').map(s => s.trim()).filter(Boolean);
+        return [raw.trim()];
+      }
+      if (typeof raw === 'number' || typeof raw === 'bigint') {
+        return [String(raw)];
+      }
+      return [];
+    };
+
+    const modeHint = String(payload.mode || payload.triviaMode || payload.type || '').toUpperCase();
+    const isSoloFlag = payload.isSolo === true || payload.solo === true || payload.soloMode === true;
+
+    const allowedSources = [
+      payload.allowedPlayerIds,
+      payload.allowedPlayers,
+      payload.allowedIds,
+      payload.allowed,
+      payload.allow,
+      payload.participants,
+      payload.allowedPlayerId,
+      payload.participantIds,
+      payload.playerIds,
+      payload.players,
+    ];
+
+    const allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
+
+    const explicitSoloHints = [
+      payload.soloPlayerId,
+      payload.targetPlayerId,
+      payload.activePlayerId,
+      payload.promptPlayerId,
+      payload.promptedPlayerId,
+      payload.focusPlayerId,
+      payload.challengePlayerId,
+      payload.soloPlayer,
+    ];
+
+    let soloCandidates = explicitSoloHints.flatMap(collectIds).filter(Boolean);
+
+    let inferredSolo = isSoloFlag || modeHint === 'SOLO' || modeHint === 'SOLO_TRIVIA' || allowedIds.length === 1 || soloCandidates.length > 0;
+
+    if (!inferredSolo) {
+      const fallbackSolo = [payload.playerId, payload.player];
+      const fallbackIds = fallbackSolo.flatMap(collectIds).filter(Boolean);
+      if (fallbackIds.length > 0) {
+        inferredSolo = true;
+        soloCandidates = soloCandidates.concat(fallbackIds);
+      }
+    }
+    triviaMode = inferredSolo ? 'SOLO' : 'FFA';
+
+    if (allowedIds.length > 0) {
+      return allowedIds.some(id => idsEqual(id, playerId));
+    }
+
+    if (soloCandidates.length > 0) {
+      return soloCandidates.some(id => idsEqual(id, playerId));
+    }
+
     if (triviaMode === 'SOLO') {
-      if (soloId) return idsEqual(soloId, playerId);
-      return false; // conservative if SOLO but no target given
+      return false; // conservative if SOLO but no explicit allow list
     }
+
     return true; // FFA fallback
   }
 
