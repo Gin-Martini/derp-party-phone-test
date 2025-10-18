@@ -64,7 +64,7 @@
 
       .tp-btn { font-size:22px;font-weight:700; letter-spacing:.02em; }
     </style>
-    <script>console.log("DerpPhone v9.8 – handles ANSWER_WINDOW_OPEN/CLOSE + state.answerWindowOpen");</script>
+    <script>console.log("DerpPhone v9.9 – roll button gating + visibility sync");</script>
   </head>
   <body>
     <div class="wrap">
@@ -150,11 +150,12 @@
       const rollValue = $('rollValue');
       const orderResult = $('orderResult');
 
-      // ======== Remove any cached legacy test button ========
+      // Remove any cached legacy test button
       const _legacyBtn = document.getElementById('btnShowRoll'); if (_legacyBtn) _legacyBtn.remove();
 
       // ======== Utils / UI ========
       function setPhase(p){ phase = p; setDbg('phase=' + p); }
+
       function setDbg(x){ if (dbg) dbg.textContent = 'last: ' + x; }
       function log(x){ logEl.textContent += x + "\n"; logEl.scrollTop = logEl.scrollHeight; }
       function showToast(text, ms=1600){ const t=$('toast'); t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
@@ -307,14 +308,31 @@
       }
 
       // ======== ROLL overlay ========
+      // ==== [ADD] Roll-visibility gating (single source of truth) ====
+      function allowRollButton(){
+        if (phase === 'lobby') return false;
+        // During turn-order: button appears only until *this* player has rolled
+        if (inTurnOrder) return !myHasRolled;
+        // Main game: button only for the active player
+        return !!canRollNow;
+      }
+      function updateRollUI(){
+        const show = allowRollButton();
+        rollBtn.style.display = show ? 'inline-block' : 'none';
+        rollBtn.disabled = !show;
+        rollBtn.classList.toggle('btn-disabled', !show);
+      }
+      // ==== [END ADD] ====
+
+      // ==== [TOUCH] showRollOverlay no longer forces the button visible ====
       function showRollOverlay(title){
         if (phase === 'lobby') { setDbg('overlay blocked in lobby'); return; }
         rollTitle.textContent = title || 'Roll';
         rollValue.textContent = '—';
         rollState.textContent = 'Waiting…';
         rollState.classList.remove('ok'); rollState.classList.add('no');
-        rollBtn.disabled = false; rollBtn.classList.remove('btn-disabled'); rollBtn.style.display='inline-block';
         rollPanel.classList.remove('hidden'); rollPanel.style.display='block';
+        updateRollUI(); // <— keep visibility in sync with gating
         setTimeout(()=>window.scrollTo(0,0), 0);
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
@@ -383,16 +401,13 @@
         wsSend({ type:intentType, optionIndex:Number(value) });                  // typed DTO
       }
 
-      // Normalize many server variants to a small set
       function normType(t){
         if(!t) return t;
         const m = {
-          // TURN ORDER
           'TURNORDER_START':'TURN_ORDER_START',
           'TURNORDER_ROLL':'TURN_ORDER_FEEDBACK',
           'TURNORDER_FEEDBACK':'TURN_ORDER_FEEDBACK',
           'TURNORDER_DONE':'TURN_ORDER_DONE',
-          // MAIN TURNS
           'START_TURN':'YOUR_TURN',
           'YOURTURN':'YOUR_TURN',
           'TURN_START':'YOUR_TURN',
@@ -400,13 +415,11 @@
           'TURN_BEGIN':'YOUR_TURN',
           'PLAYER_TURN':'YOUR_TURN',
           'CURRENT_TURN':'YOUR_TURN',
-          // PROMPTS
           'PROMPT_ROLL':'ROLL_PROMPT',
           'ROLLREQUEST':'ROLL_PROMPT',
           'ROLL_REQUEST':'ROLL_PROMPT',
           'ROLLNOW':'ROLL_PROMPT',
           'TURN_PROMPT':'ROLL_PROMPT',
-          // TRIVIA variants
           'TRIVIA_BEGIN':'TRIVIA_START',
           'TRIVIA_OPEN':'TRIVIA_START',
           'TRIVIA_PROMPT':'TRIVIA_START',
@@ -454,6 +467,7 @@
             }
             myHasRolled = false;
             showRollOverlay('Roll for Turn Order');
+            updateRollUI(); // ==== [ADD] keep visibility strict
             return;
           }
 
@@ -465,8 +479,8 @@
               rollValue.textContent = String(roll);
               rollState.textContent = 'Rolled';
               rollState.classList.add('ok'); rollState.classList.remove('no');
-              rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
             }
+            updateRollUI(); // ==== [ADD]
             return;
           }
 
@@ -485,12 +499,10 @@
             orderResult.classList.remove('hidden');
 
             canRollNow = false;
-            rollBtn.disabled = true;
-            rollBtn.classList.add('btn-disabled');
-            rollBtn.style.display = 'none';
             rollState.textContent = 'Waiting…';
             rollState.classList.remove('ok'); 
             rollState.classList.add('no');
+            updateRollUI(); // ==== [ADD] hide button post-order
             return;
           }
 
@@ -507,8 +519,6 @@
 
             canRollNow = isMe;
             if (isMe) {
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
               rollState.textContent = 'Waiting…';
               rollState.classList.remove('ok'); rollState.classList.add('no');
               showRollOverlay('Your Turn — Roll!');
@@ -517,6 +527,7 @@
               hideRollOverlay();
               showToast('⏳ Waiting for other player…', 1200);
             }
+            updateRollUI(); // ==== [ADD]
             return;
           }
 
@@ -528,10 +539,8 @@
             const isNameMatch = (pname && pname === (nameInput.value||'').trim());
             const isMe = isPidMatch || (!isPidMatch && isNameMatch);
 
+            canRollNow = !!isMe;
             if (isMe) {
-              canRollNow = true;
-              rollBtn.disabled = false;
-              rollBtn.classList.remove('btn-disabled');
               rollState.textContent = 'Waiting…';
               rollState.classList.remove('ok'); rollState.classList.add('no');
               showRollOverlay('Your Turn — Roll!');
@@ -539,6 +548,7 @@
             } else {
               setDbg('ROLL_PROMPT (not me)');
             }
+            updateRollUI(); // ==== [ADD]
             return;
           }
 
@@ -546,14 +556,16 @@
             if (idsEqual(payload.playerId || payload.id, playerId)) {
               rollState.textContent = 'Rolled';
               rollState.classList.add('ok'); rollState.classList.remove('no');
-              rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
             }
+            canRollNow = false;
+            updateRollUI(); // ==== [ADD]
             return;
           }
 
           if (type === 'MOVE_END') {
             canRollNow = false;
             hideRollOverlay();
+            updateRollUI(); // ==== [ADD]
             return;
           }
 
@@ -623,6 +635,10 @@
               markTaken(s.taken||[]);
               const me = players.find(p => (p.playerId && p.playerId===playerId) || (p.name && p.name===(nameInput.value||'').trim()));
               if (me && !!me.ready !== myReady) setReadyUI(!!me.ready);
+              canRollNow = false;
+              inTurnOrder = false;
+              myHasRolled = false;
+              updateRollUI(); // ==== [ADD]
               return;
             }
 
@@ -637,6 +653,7 @@
               lobbyArea.classList.add('hidden');
               setPhase('in_game');
               hideRollOverlay();
+              updateRollUI(); // ==== [ADD]
               return;
             }
 
@@ -644,14 +661,16 @@
               if (phase === 'lobby') return;
               const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
               if (!pid) return;
-              if (idsEqual(pid, playerId)) {
-                canRollNow = true;
+              canRollNow = idsEqual(pid, playerId);
+              if (canRollNow) {
                 showRollOverlay('Your Turn — Roll!');
-                rollBtn.disabled = false;
-                rollBtn.classList.remove('btn-disabled');
                 rollState.textContent = 'Waiting…';
                 rollState.classList.remove('ok'); rollState.classList.add('no');
+              } else {
+                // not me => ensure hidden
+                hideRollOverlay();
               }
+              updateRollUI(); // ==== [ADD]
               return;
             }
 
@@ -673,6 +692,7 @@
 
           clearInterval(hbInterval);
           hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
+          updateRollUI(); // ==== [ADD] baseline hidden
         };
         sock.onmessage = onSocketMessage;
         sock.onclose = () => {
@@ -690,6 +710,7 @@
           if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
           if (triviaPadEl) triviaPadEl.style.display='none';
           setDbg('WS closed');
+          updateRollUI(); // ==== [ADD]
         };
       }
 
@@ -771,20 +792,24 @@
       // Roll button
       rollBtn.addEventListener('click', ()=>{
         if (!ws) return;
+        // Hard gate: ignore clicks if not allowed
+        if (!allowRollButton()) { updateRollUI(); return; }
+
         if (inTurnOrder && !myHasRolled) {
           wsSend({ type:'PLAYER_ROLL' });
           wsSend({ type:'ROLL', phase:'TURN_ORDER' });
           myHasRolled = true;
-          rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
           rollState.textContent = 'Rolling…';
+          updateRollUI(); // will hide once myHasRolled=true
           setDbg('PLAYER_ROLL/ROLL (turn-order) sent');
           return;
         }
         if (canRollNow) {
           wsSend({ type:'ROLL_MOVE' });
           wsSend({ type:'ROLL', phase:'MOVE' });
-          rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
           rollState.textContent = 'Rolling…';
+          canRollNow = false; // proactively block double taps
+          updateRollUI();
           setDbg('ROLL_MOVE/ROLL (move) sent');
         }
       }, { passive:true });
