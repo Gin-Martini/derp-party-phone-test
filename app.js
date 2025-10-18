@@ -1,4 +1,4 @@
-// DerpPhone v10.0 – trivia SOLO gating + roll gating
+// DerpPhone v10.0.1 – trivia SOLO gating + roll gating
 'use strict';
 
 (() => {
@@ -376,9 +376,6 @@
     }
 
     const explicitAllowAll = explicitAllowAllFromFlags || allowAllFromAllowed;
-
-    const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
-    const explicitAllowAll = allowAllFlags.some((v) => v === true || String(v).toLowerCase() === 'all');
 
     const soloHintSources = [
       payload.soloPlayerId,
