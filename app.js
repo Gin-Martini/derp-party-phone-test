@@ -510,8 +510,19 @@
       'ANSWER_WINDOW_CLOSE':'TRIVIA_END',
     };
     if (m[upper]) return m[upper];
+
+    if (upper.startsWith('SOLOTRIVIA_')) {
+      const base = 'TRIVIA_' + upper.slice('SOLOTRIVIA_'.length);
+      return m[base] || base;
+    }
+
     if (upper.startsWith('SOLO_')) {
       const base = upper.slice(5);
+      return m[base] || base;
+    }
+
+    if (upper.startsWith('SOLOTRIVIA')) {
+      const base = 'TRIVIA' + upper.slice('SOLOTRIVIA'.length);
       return m[base] || base;
     }
     return upper;
