@@ -1,4 +1,4 @@
-// DerpPhone v10.0 – trivia SOLO gating + roll gating
+// DerpPhone v10.0.1 – trivia SOLO gating + roll gating
 'use strict';
 
 (() => {
