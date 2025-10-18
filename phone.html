@@ -64,7 +64,7 @@
 
       .tp-btn { font-size:22px;font-weight:700; letter-spacing:.02em; }
     </style>
-    <script>console.log("DerpPhone v9.7 – trivia pad also handles STATE-wrapped TRIVIA_START/END");</script>
+    <script>console.log("DerpPhone v9.7 – trivia start/end variants normalized, legacy STATE paths handled");</script>
   </head>
   <body>
     <div class="wrap">
@@ -77,6 +77,7 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
+          <!-- (legacy Show Roll UI button intentionally not present) -->
         </div>
       </div>
 
@@ -149,6 +150,9 @@
       const rollState = $('rollState');
       const rollValue = $('rollValue');
       const orderResult = $('orderResult');
+
+      // ======== Belt-and-suspenders: remove any legacy test button if cached ========
+      const _legacyBtn = document.getElementById('btnShowRoll'); if (_legacyBtn) _legacyBtn.remove();
 
       // ======== Utils / UI ========
       function setPhase(p){ phase = p; setDbg('phase=' + p); }
@@ -289,9 +293,7 @@
         if (!ws) return;
         if (!id) return;
         if (takenChars.has(id) && id !== myCharId){ showToast('That character is taken.'); return; }
-        if (myReady && id !== myCharId) {
-          sendUnready('Changed character');
-        }
+        if (myReady && id !== myCharId) { sendUnready('Changed character'); }
         wsSend({ type:'CHARACTER_SELECT', charId:id });
         myCharId = id;
         markSelected(myCharId);
@@ -318,7 +320,7 @@
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
 
-      // ======== Trivia Pad ========
+      // ---- Trivia Pad (controls only, no question) ----
       let triviaPadEl = null, triviaPadButtons = [];
       function ensureTriviaPad(){
         if (triviaPadEl) return triviaPadEl;
@@ -376,25 +378,13 @@
         setTimeout(()=>{ if (triviaPadEl) triviaPadEl.style.display='none'; }, 600);
       }
 
-      // === trivia handlers (used by both direct + STATE-wrapped messages)
-      function handleTriviaStart(payload){
-        // payload may include deadlineMs/serverOpenTs in some server builds (safe to ignore)
-        showTriviaPad();
-      }
-      function handleTriviaEnd(payload){
-        endTriviaPad();
-        if (payload && payload.winnerId){
-          const coins = Number(payload.awarded || 0);
-          showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
-        }
-      }
-
       // ======== Intent (legacy+modern) ========
       function sendIntent(intentType, value){
         wsSend({ type:'INTENT', intent:intentType, value:String(value) });       // legacy
         wsSend({ type:intentType, optionIndex:Number(value) });                  // typed DTO
       }
 
+      // Normalize many server variants to a small set
       function normType(t){
         if(!t) return t;
         const m = {
@@ -417,11 +407,15 @@
           'ROLL_REQUEST':'ROLL_PROMPT',
           'ROLLNOW':'ROLL_PROMPT',
           'TURN_PROMPT':'ROLL_PROMPT',
-          // MOVES
-          'MOVE_START':'MOVE_BEGIN',
-          'MOVE_STARTED':'MOVE_BEGIN',
-          'MOVE_DONE':'MOVE_END',
-          'MOVE_FINISH':'MOVE_END',
+          // TRIVIA variants
+          'TRIVIA_BEGIN':'TRIVIA_START',
+          'TRIVIA_OPEN':'TRIVIA_START',
+          'TRIVIA_PROMPT':'TRIVIA_START',
+          'QUESTION_START':'TRIVIA_START',
+          'PROMPT_TRIVIA':'TRIVIA_START',
+          'TRIVIA_DONE':'TRIVIA_END',
+          'TRIVIA_CLOSE':'TRIVIA_END',
+          'TRIVIA_RESULT':'TRIVIA_END',
         };
         return m[t] || t;
       }
@@ -582,13 +576,30 @@
             return;
           }
 
-          // === TRIVIA (direct) ===
-          if (type === 'TRIVIA_START') { handleTriviaStart(payload); return; }
-          if (type === 'TRIVIA_END')   { handleTriviaEnd(payload);   return; }
+          // === TRIVIA (controls only) ===
+          if (type === 'TRIVIA_START') { showTriviaPad(); return; }
+          if (type === 'TRIVIA_END') {
+            endTriviaPad();
+            if (payload && payload.winnerId) {
+              const coins = Number(payload.awarded || 0);
+              showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
+            }
+            return;
+          }
 
-          // ---- STATE snapshots ----
+          // ---- STATE snapshots / legacy trivia paths ----
           if (msg.type === 'STATE') {
             const s = msg.state || {};
+
+            // direct trivia hints embedded in state
+            if (s.trivia && (s.trivia.open === true || s.trivia.phase === 'start' || s.trivia.phase === 'open')) {
+              showTriviaPad(); return;
+            }
+            if (s.trivia && (s.trivia.closed === true || s.trivia.phase === 'end' || s.trivia.phase === 'closed' || s.trivia.phase === 'result')) {
+              endTriviaPad(); return;
+            }
+            if (s.type === 'QUESTION_START' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT') { showTriviaPad(); return; }
+            if (s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT') { endTriviaPad(); return; }
 
             if (s.type === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
 
@@ -634,10 +645,6 @@
               }
               return;
             }
-
-            // === TRIVIA (STATE-wrapped) ===
-            if (s.type === 'TRIVIA_START') { handleTriviaStart(s); return; }
-            if (s.type === 'TRIVIA_END')   { handleTriviaEnd(s);   return; }
 
             if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
           }
