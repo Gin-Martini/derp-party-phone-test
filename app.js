@@ -267,6 +267,14 @@
     return pad;
   }
   function showTriviaPad(){
+    if (triviaAllowed === false) {
+      endTriviaPad();
+      return;
+    }
+    if (triviaMode === 'SOLO' && triviaAllowed !== true) {
+      endTriviaPad();
+      return;
+    }
     const pad = ensureTriviaPad();
     triviaPadButtons.forEach(bb=>{ bb.disabled = false; bb.classList.remove('btn-disabled'); });
     pad.style.display = 'block';
@@ -530,7 +538,7 @@
         }
 
         if (s.type === 'ANSWER_WINDOW_OPEN' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
-          if (triviaAllowed !== false) showTriviaPad();
+          if (triviaAllowed === true || triviaMode !== 'SOLO') showTriviaPad();
           return;
         }
         if (s.type === 'ANSWER_WINDOW_CLOSE' || s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT' || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
