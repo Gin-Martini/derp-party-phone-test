@@ -330,6 +330,23 @@
       return '';
     };
 
+    const normalizeToken = (value) => {
+      if (value == null) return '';
+      return String(value).trim().toLowerCase().replace(/[^a-z0-9*]/g, '');
+    };
+    const allowAllTokens = new Set([
+      'all',
+      '*',
+      'everyone',
+      'everybody',
+      'allplayers',
+      'anyone',
+      'anybody',
+      'any',
+      'ffa',
+      'open',
+    ]);
+
     const allowedSources = [
       payload.allowed,
       payload.allowedPlayerIds,
@@ -342,7 +359,23 @@
       payload.playerIds,
       payload.players,
     ];
-    const allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
+    let allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
+
+    const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
+    const explicitAllowAllFromFlags = allowAllFlags.some((v) => {
+      if (v === true) return true;
+      const token = normalizeToken(v);
+      if (!token) return false;
+      return allowAllTokens.has(token);
+    });
+
+    const normalizedAllowed = allowedIds.map((id) => normalizeToken(id));
+    const allowAllFromAllowed = normalizedAllowed.some((token) => allowAllTokens.has(token));
+    if (allowAllFromAllowed) {
+      allowedIds = allowedIds.filter((_, idx) => !allowAllTokens.has(normalizedAllowed[idx]));
+    }
+
+    const explicitAllowAll = explicitAllowAllFromFlags || allowAllFromAllowed;
 
     const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
     const explicitAllowAll = allowAllFlags.some((v) => v === true || String(v).toLowerCase() === 'all');
@@ -404,7 +437,7 @@
   function hasTriviaHints(payload) {
     if (!payload || typeof payload !== 'object') return false;
     const hintKeys = [
-      'mode', 'triviaMode', 'answerMode',
+      'mode', 'triviaMode', 'answerMode', 'type',
       'isSolo', 'solo', 'soloMode',
       'isFfa', 'ffa', 'freeForAll',
       'allowedPlayerIds', 'allowedPlayers', 'allowedIds', 'allowed', 'allow', 'participants',
