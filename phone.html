@@ -64,7 +64,7 @@
 
       .tp-btn { font-size:22px;font-weight:700; letter-spacing:.02em; }
     </style>
-    <script>console.log("DerpPhone v9.7 – trivia start/end variants normalized, legacy STATE paths handled");</script>
+    <script>console.log("DerpPhone v9.8 – handles ANSWER_WINDOW_OPEN/CLOSE + state.answerWindowOpen");</script>
   </head>
   <body>
     <div class="wrap">
@@ -77,7 +77,6 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
-          <!-- (legacy Show Roll UI button intentionally not present) -->
         </div>
       </div>
 
@@ -151,7 +150,7 @@
       const rollValue = $('rollValue');
       const orderResult = $('orderResult');
 
-      // ======== Belt-and-suspenders: remove any legacy test button if cached ========
+      // ======== Remove any cached legacy test button ========
       const _legacyBtn = document.getElementById('btnShowRoll'); if (_legacyBtn) _legacyBtn.remove();
 
       // ======== Utils / UI ========
@@ -320,7 +319,7 @@
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
 
-      // ---- Trivia Pad (controls only, no question) ----
+      // ---- Trivia Pad (controls only) ----
       let triviaPadEl = null, triviaPadButtons = [];
       function ensureTriviaPad(){
         if (triviaPadEl) return triviaPadEl;
@@ -413,9 +412,11 @@
           'TRIVIA_PROMPT':'TRIVIA_START',
           'QUESTION_START':'TRIVIA_START',
           'PROMPT_TRIVIA':'TRIVIA_START',
+          'ANSWER_WINDOW_OPEN':'TRIVIA_START',
           'TRIVIA_DONE':'TRIVIA_END',
           'TRIVIA_CLOSE':'TRIVIA_END',
           'TRIVIA_RESULT':'TRIVIA_END',
+          'ANSWER_WINDOW_CLOSE':'TRIVIA_END',
         };
         return m[t] || t;
       }
@@ -591,15 +592,23 @@
           if (msg.type === 'STATE') {
             const s = msg.state || {};
 
-            // direct trivia hints embedded in state
+            // direct flags for the answer window
+            if (s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
+              showTriviaPad(); return;
+            }
+            if (s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
+              endTriviaPad(); return;
+            }
+
+            // trivia blobs or variants
             if (s.trivia && (s.trivia.open === true || s.trivia.phase === 'start' || s.trivia.phase === 'open')) {
               showTriviaPad(); return;
             }
             if (s.trivia && (s.trivia.closed === true || s.trivia.phase === 'end' || s.trivia.phase === 'closed' || s.trivia.phase === 'result')) {
               endTriviaPad(); return;
             }
-            if (s.type === 'QUESTION_START' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT') { showTriviaPad(); return; }
-            if (s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT') { endTriviaPad(); return; }
+            if (s.type === 'QUESTION_START' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT' || s.type === 'ANSWER_WINDOW_OPEN') { showTriviaPad(); return; }
+            if (s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT' || s.type === 'ANSWER_WINDOW_CLOSE') { endTriviaPad(); return; }
 
             if (s.type === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
 
