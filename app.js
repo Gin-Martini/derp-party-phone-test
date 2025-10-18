@@ -325,8 +325,14 @@
       const compact = String(value).trim();
       if (!compact) return '';
       const cleaned = compact.toUpperCase().replace(/[^A-Z]/g, '');
-      if (cleaned === 'SOLO' || cleaned === 'SOLOTRIVIA') return 'SOLO';
-      if (cleaned === 'FFA' || cleaned === 'FREEFORALL' || cleaned === 'EVERYONE' || cleaned === 'ALLPLAYERS') return 'FFA';
+      if (!cleaned) return '';
+
+      const looksSolo = cleaned === 'SOLO' || cleaned === 'SOLOTRIVIA' || cleaned.includes('SOLOTRIVIA') || cleaned.includes('TRIVIASOLO') || cleaned.startsWith('SOLO');
+      if (looksSolo) return 'SOLO';
+
+      const looksFfa = cleaned === 'FFA' || cleaned === 'FREEFORALL' || cleaned === 'EVERYONE' || cleaned === 'ALLPLAYERS' || cleaned.includes('FREEFORALL');
+      if (looksFfa) return 'FFA';
+
       return '';
     };
 
@@ -510,8 +516,26 @@
       'ANSWER_WINDOW_CLOSE':'TRIVIA_END',
     };
     if (m[upper]) return m[upper];
-    if (upper.startsWith('SOLO_')) {
-      const base = upper.slice(5);
+
+    const soloSanitized = upper.replace(/-/g, '_');
+
+    if (soloSanitized.startsWith('SOLO_TRIVIA_')) {
+      const base = 'TRIVIA_' + soloSanitized.slice('SOLO_TRIVIA_'.length);
+      return m[base] || base;
+    }
+
+    if (soloSanitized.startsWith('SOLOTRIVIA_')) {
+      const base = 'TRIVIA_' + soloSanitized.slice('SOLOTRIVIA_'.length);
+      return m[base] || base;
+    }
+
+    if (soloSanitized.startsWith('SOLO_')) {
+      const base = soloSanitized.slice('SOLO_'.length);
+      return m[base] || base;
+    }
+
+    if (soloSanitized.startsWith('SOLOTRIVIA')) {
+      const base = 'TRIVIA' + soloSanitized.slice('SOLOTRIVIA'.length);
       return m[base] || base;
     }
     return upper;
