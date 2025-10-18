@@ -1,4 +1,4 @@
-// DerpPhone v9.9 – roll button gating + visibility sync (module refactor)
+// DerpPhone v10.0 – trivia SOLO gating + roll gating
 'use strict';
 
 (() => {
@@ -13,8 +13,11 @@
   const takenChars = new Set();
   const playerNameById = new Map();
   let myHasRolled = false, inTurnOrder = false, canRollNow = false;
-  // 'lobby' | 'turn_order' | 'in_game'
-  let phase = 'lobby';
+  let phase = 'lobby'; // 'lobby' | 'turn_order' | 'in_game'
+
+  // Trivia gating (new)
+  let triviaAllowed = null;         // null=unknown, true=can answer, false=cannot
+  let triviaMode = 'FFA';           // 'FFA' | 'SOLO' (best effort from payload)
 
   // ======== DOM ========
   const $ = (id)=>document.getElementById(id);
@@ -35,15 +38,13 @@
   const rollValue = $('rollValue');
   const orderResult = $('orderResult');
 
-  // Remove any cached legacy test button
   const _legacyBtn = document.getElementById('btnShowRoll'); if (_legacyBtn) _legacyBtn.remove();
 
   // ======== Utils / UI ========
   function setPhase(p){ phase = p; setDbg('phase=' + p); }
-
   function setDbg(x){ if (dbg) dbg.textContent = 'last: ' + x; }
-  function log(x){ logEl.textContent += x + "\n"; logEl.scrollTop = logEl.scrollHeight; }
-  function showToast(text, ms=1600){ const t=$('toast'); t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
+  function log(x){ if (!logEl) return; logEl.textContent += x + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+  function showToast(text, ms=1600){ const t=$('toast'); if(!t) return; t.textContent=text; t.style.display='block'; clearTimeout(showToast._to); showToast._to=setTimeout(()=>t.style.display='none',ms); }
   function setStatus(text, pill=false){ statusEl.textContent='Status: '+text; statusEl.classList.toggle('pill', pill); }
   function setLobbyVisible(on){ lobbyArea.classList.toggle('hidden', !on); }
   function setReadyPill(on){ readyPill.textContent=on?'Ready':'Not Ready'; readyPill.classList.toggle('ok',on); readyPill.classList.toggle('no',!on); }
@@ -193,11 +194,10 @@
   }
 
   // ======== ROLL overlay ========
-  // ==== Roll-visibility gating (single source of truth) ====
   function allowRollButton(){
     if (phase === 'lobby') return false;
-    if (inTurnOrder) return !myHasRolled;   // button appears only until *this* player has rolled
-    return !!canRollNow;                     // main game: only for active player
+    if (inTurnOrder) return !myHasRolled;
+    return !!canRollNow;
   }
   function updateRollUI(){
     const show = allowRollButton();
@@ -256,6 +256,7 @@
     triviaPadButtons = [btnA, btnB, btnC, btnD];
     triviaPadButtons.forEach((b, i)=>{
       b.addEventListener('click', ()=>{
+        if (triviaAllowed === false) { showToast('Not your question.'); return; }
         triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
         sendIntent('TRIVIA_ANSWER', i);
         showToast('✅ Answer sent');
@@ -276,10 +277,40 @@
     setTimeout(()=>{ if (triviaPadEl) triviaPadEl.style.display='none'; }, 600);
   }
 
+  // === SOLO/FFA gating helpers ===
+  function computeTriviaEligibility(payload){
+    if (!payload) return true;
+    const mode = String(payload.mode || payload.triviaMode || '').toUpperCase();
+    const allowed = payload.allowed || payload.allow || payload.participants || [];
+    const soloId = payload.soloPlayerId || payload.playerId || payload.activePlayerId || '';
+
+    triviaMode = (mode === 'SOLO') ? 'SOLO' : 'FFA';
+
+    if (Array.isArray(allowed) && allowed.length > 0) {
+      return allowed.some(id => idsEqual(id, playerId));
+    }
+    if (triviaMode === 'SOLO') {
+      if (soloId) return idsEqual(soloId, playerId);
+      return false; // conservative if SOLO but no target given
+    }
+    return true; // FFA fallback
+  }
+
+  function showTriviaPadIfAllowed(payload){
+    triviaAllowed = computeTriviaEligibility(payload);
+    if (triviaAllowed) {
+      showTriviaPad();
+    } else {
+      endTriviaPad();
+      showToast('Trivia in progress…');
+    }
+  }
+
   // ======== Intent (legacy+modern) ========
   function sendIntent(intentType, value){
-    wsSend({ type:'INTENT', intent:intentType, value:String(value) });       // legacy
-    wsSend({ type:intentType, optionIndex:Number(value) });                  // typed DTO
+    if (intentType === 'TRIVIA_ANSWER' && triviaAllowed === false) return;
+    wsSend({ type:'INTENT', intent:intentType, value:String(value) }); // legacy
+    wsSend({ type:intentType, optionIndex:Number(value) });            // typed DTO
   }
 
   function normType(t){
@@ -322,7 +353,6 @@
       const msg = JSON.parse(ev.data);
       if (msg.type === 'PONG') return;
 
-      // direct catalog
       if (msg.type === 'CHARACTER_CATALOG') {
         renderCatalog(msg.entries || msg.list || msg.characters || []);
         return;
@@ -393,7 +423,8 @@
         const pid  = (payload.playerId || payload.id || '').trim();
         const pname = (payload.name || '').trim();
         const isPidMatch = (pid && pid === playerId);
-        const isNameMatch = (pname && pname === (nameInput.value||'').trim());
+        theNameValue = (nameInput.value||'').trim();
+        const isNameMatch = (pname && pname === theNameValue);
         const isMe = isPidMatch || (!isPidMatch && isNameMatch);
 
         if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
@@ -471,9 +502,15 @@
       }
 
       // === TRIVIA (controls only) ===
-      if (type === 'TRIVIA_START') { showTriviaPad(); return; }
+      if (type === 'TRIVIA_START') {
+        showTriviaPadIfAllowed(payload); // uses mode/allowed/soloPlayerId if present
+        return;
+      }
+
       if (type === 'TRIVIA_END') {
         endTriviaPad();
+        triviaAllowed = null;
+        triviaMode = 'FFA';
         if (payload && payload.winnerId) {
           const coins = Number(payload.awarded || 0);
           showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
@@ -485,23 +522,20 @@
       if (msg.type === 'STATE') {
         const s = msg.state || {};
 
-        // direct flags for the answer window
-        if (s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
-          showTriviaPad(); return;
-        }
-        if (s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
-          endTriviaPad(); return;
-        }
-
-        // trivia blobs or variants
         if (s.trivia && (s.trivia.open === true || s.trivia.phase === 'start' || s.trivia.phase === 'open')) {
-          showTriviaPad(); return;
+          showTriviaPadIfAllowed(s.trivia); return;
         }
         if (s.trivia && (s.trivia.closed === true || s.trivia.phase === 'end' || s.trivia.phase === 'closed' || s.trivia.phase === 'result')) {
-          endTriviaPad(); return;
+          endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
         }
-        if (s.type === 'QUESTION_START' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT' || s.type === 'ANSWER_WINDOW_OPEN') { showTriviaPad(); return; }
-        if (s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT' || s.type === 'ANSWER_WINDOW_CLOSE') { endTriviaPad(); return; }
+
+        if (s.type === 'ANSWER_WINDOW_OPEN' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
+          if (triviaAllowed !== false) showTriviaPad();
+          return;
+        }
+        if (s.type === 'ANSWER_WINDOW_CLOSE' || s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT' || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
+          endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
+        }
 
         if (s.type === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
 
@@ -584,6 +618,7 @@
       enableReadyButton(false);
       setReadyUI(false);
       canRollNow = false; inTurnOrder = false; myHasRolled = false;
+      triviaAllowed = null; triviaMode = 'FFA';
       setPhase('lobby');
       if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
       if (triviaPadEl) triviaPadEl.style.display='none';
