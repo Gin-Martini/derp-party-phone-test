@@ -294,30 +294,57 @@
     }
 
     const collectIds = (raw) => {
-      if (raw == null) return [];
-      if (Array.isArray(raw)) return raw.flatMap(collectIds).filter(Boolean);
-      if (typeof raw === 'object') {
-        const direct = raw.playerId || raw.id || raw.value || raw.key || raw.targetPlayerId || raw.soloPlayerId;
-        if (direct != null) return collectIds(direct);
-
-        const keys = Object.keys(raw);
-        if (!keys.length) return [];
-        const boolKeys = keys.filter((k) => typeof raw[k] === 'boolean');
-        if (boolKeys.length === keys.length) {
-          return boolKeys.filter((k) => raw[k]);
+      const out = [];
+      const visit = (value) => {
+        if (value == null) return;
+        if (Array.isArray(value)) {
+          for (const entry of value) visit(entry);
+          return;
         }
-        return keys.flatMap((k) => collectIds(raw[k])).filter(Boolean);
-      }
-      if (typeof raw === 'string') {
-        const trimmed = raw.trim();
-        if (!trimmed) return [];
-        if (trimmed.includes(',')) return trimmed.split(',').map((s) => s.trim()).filter(Boolean);
-        return [trimmed];
-      }
-      if (typeof raw === 'number' || typeof raw === 'bigint') {
-        return [String(raw)];
-      }
-      return [];
+        if (typeof value === 'object') {
+          const direct = value.playerId || value.id || value.value || value.key || value.targetPlayerId || value.soloPlayerId;
+          if (direct != null) {
+            visit(direct);
+            return;
+          }
+
+          const keys = Object.keys(value);
+          if (!keys.length) return;
+          const boolKeys = keys.filter((k) => typeof value[k] === 'boolean');
+          if (boolKeys.length === keys.length) {
+            boolKeys.forEach((k) => { if (value[k]) out.push(k); });
+            return;
+          }
+          keys.forEach((k) => visit(value[k]));
+          return;
+        }
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          if (!trimmed) return;
+          if (trimmed.includes(',')) {
+            trimmed.split(',').forEach((part) => {
+              const piece = part.trim();
+              if (piece) out.push(piece);
+            });
+            return;
+          }
+          out.push(trimmed);
+          return;
+        }
+        if (typeof value === 'number' || typeof value === 'bigint') {
+          out.push(String(value));
+        }
+      };
+      visit(raw);
+      return out;
+    };
+
+    const collectFromSources = (sources) => {
+      const combined = [];
+      (sources || []).forEach((src) => {
+        collectIds(src).forEach((id) => { if (id) combined.push(id); });
+      });
+      return combined;
     };
 
     const normalizeMode = (value) => {
@@ -342,7 +369,7 @@
       payload.playerIds,
       payload.players,
     ];
-    const allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
+    const allowedIds = collectFromSources(allowedSources);
 
     const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
     const explicitAllowAll = allowAllFlags.some((v) => v === true || String(v).toLowerCase() === 'all');
@@ -357,10 +384,10 @@
       payload.challengePlayerId,
       payload.soloPlayer,
     ];
-    const soloHints = soloHintSources.flatMap(collectIds).filter(Boolean);
+    const soloHints = collectFromSources(soloHintSources);
 
     const fallbackSolo = [payload.playerId, payload.player];
-    const fallbackIds = fallbackSolo.flatMap(collectIds).filter(Boolean);
+    const fallbackIds = collectFromSources(fallbackSolo);
 
     const explicitMode =
       normalizeMode(payload.mode) ||
@@ -396,8 +423,13 @@
       return false;
     }
 
+    const explicitFfaIntent =
+      resolvedMode === 'FFA' &&
+      (explicitMode === 'FFA' || isFfaFlag);
+
     if (allowedIds.length > 0) return isAllowed(allowedIds);
     if (explicitAllowAll) return true;
+    if (explicitFfaIntent) return true;
     return false;
   }
 
