@@ -396,8 +396,13 @@
       return false;
     }
 
+    const explicitFfaIntent =
+      resolvedMode === 'FFA' &&
+      (explicitMode === 'FFA' || isFfaFlag);
+
     if (allowedIds.length > 0) return isAllowed(allowedIds);
     if (explicitAllowAll) return true;
+    if (explicitFfaIntent) return true;
     return false;
   }
 
