@@ -64,7 +64,7 @@
 
       .tp-btn { font-size:22px;font-weight:700; letter-spacing:.02em; }
     </style>
-    <script>console.log("DerpPhone v9.6 – removed legacy Show Roll UI, parity ready/unready");</script>
+    <script>console.log("DerpPhone v9.7 – trivia pad also handles STATE-wrapped TRIVIA_START/END");</script>
   </head>
   <body>
     <div class="wrap">
@@ -77,7 +77,6 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
-          <!-- (legacy Show Roll UI button intentionally not present) -->
         </div>
       </div>
 
@@ -120,7 +119,7 @@
     (() => {
       // ======== Config ========
       const BASE      = 'https://derpparty-relay.fly.dev';
-      const HTTP_BASE = BASE;                                // ensure https
+      const HTTP_BASE = BASE;
       const WS_URL    = BASE.replace('https','wss') + '/socket';
 
       // ======== State ========
@@ -151,9 +150,6 @@
       const rollValue = $('rollValue');
       const orderResult = $('orderResult');
 
-      // ======== Belt-and-suspenders: remove any legacy test button if cached ========
-      const _legacyBtn = document.getElementById('btnShowRoll'); if (_legacyBtn) _legacyBtn.remove();
-
       // ======== Utils / UI ========
       function setPhase(p){ phase = p; setDbg('phase=' + p); }
       function setDbg(x){ if (dbg) dbg.textContent = 'last: ' + x; }
@@ -166,7 +162,6 @@
       function idsEqual(a,b){ return String(a||'').trim() === String(b||'').trim(); }
 
       function enableReadyButton(can){
-        // keep enabled when ready, so it can act as UNREADY toggle
         const shouldEnable = can || myReady;
         readyBtn.disabled = !shouldEnable;
         readyBtn.classList.toggle('btn-disabled', !shouldEnable);
@@ -176,7 +171,6 @@
       function setReadyUI(isReady){
         myReady = !!isReady;
         setReadyPill(myReady);
-        // Toggle button label and styling
         readyBtn.textContent = myReady ? 'Unready' : 'I’m Ready';
         readyBtn.classList.toggle('btn-primary', myReady);
         readyBtn.classList.toggle('btn-accent', !myReady);
@@ -206,38 +200,38 @@
             data: e.portraitData || e.portrait || ''
           });
 
-        const btn = document.createElement('button');
-        btn.className = 'charBtn';
-        btn.dataset.charId = id;
-        btn.type = 'button';
+          const btn = document.createElement('button');
+          btn.className = 'charBtn';
+          btn.dataset.charId = id;
+          btn.type = 'button';
 
-        const portrait = document.createElement('div');
-        portrait.className = 'portrait';
-        if (src){
-          const img = document.createElement('img');
-          img.loading = 'lazy';
-          img.decoding = 'async';
-          img.crossOrigin = 'anonymous';
-          img.referrerPolicy = 'no-referrer';
-          img.src = src;
-          img.onerror = () => {
-            portrait.innerHTML='';
+          const portrait = document.createElement('div');
+          portrait.className = 'portrait';
+          if (src){
+            const img = document.createElement('img');
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.crossOrigin = 'anonymous';
+            img.referrerPolicy = 'no-referrer';
+            img.src = src;
+            img.onerror = () => {
+              portrait.innerHTML='';
+              const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
+              portrait.appendChild(fb);
+            };
+            portrait.appendChild(img);
+          } else {
             const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
             portrait.appendChild(fb);
-          };
-          portrait.appendChild(img);
-        } else {
-          const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
-          portrait.appendChild(fb);
-        }
+          }
 
-        const name = document.createElement('div');
-        name.className = 'name';
-        name.textContent = label;
+          const name = document.createElement('div');
+          name.className = 'name';
+          name.textContent = label;
 
-        btn.appendChild(portrait);
-        btn.appendChild(name);
-        charGrid.appendChild(btn);
+          btn.appendChild(portrait);
+          btn.appendChild(name);
+          charGrid.appendChild(btn);
         });
 
         markTaken([]);
@@ -264,7 +258,7 @@
         });
       }
 
-      // ======== READY helpers (authoritative toggle) ========
+      // ======== READY helpers ========
       function wsSend(obj){
         try{ ws && ws.readyState===1 && ws.send(JSON.stringify(obj)); }catch(_){ /*no-op*/ }
       }
@@ -272,9 +266,9 @@
       function sendReady(){
         if (!ws) return;
         if (!myCharId){ showToast('Pick a character first'); return; }
-        if (myReady) return; // already ready
-        wsSend({ type:'PLAYER_READY' });            // modern
-        wsSend({ type:'READY' });                   // legacy
+        if (myReady) return;
+        wsSend({ type:'PLAYER_READY' });
+        wsSend({ type:'READY' });
         setReadyUI(true);
         showToast('✅ Ready');
         log('> PLAYER_READY');
@@ -282,9 +276,9 @@
 
       function sendUnready(reason){
         if (!ws) return;
-        if (!myReady && !reason) return; // nothing to do
-        wsSend({ type:'PLAYER_UNREADY' });         // modern
-        wsSend({ type:'NOT_READY' });              // legacy
+        if (!myReady && !reason) return;
+        wsSend({ type:'PLAYER_UNREADY' });
+        wsSend({ type:'NOT_READY' });
         setReadyUI(false);
         if (reason) showToast('⛔ Unreadied: ' + reason);
         else showToast('⛔ Unready');
@@ -295,11 +289,9 @@
         if (!ws) return;
         if (!id) return;
         if (takenChars.has(id) && id !== myCharId){ showToast('That character is taken.'); return; }
-        // If switching to a different character while Ready -> auto-unready
         if (myReady && id !== myCharId) {
           sendUnready('Changed character');
         }
-        // Selecting same again is fine; still send to server to confirm selection
         wsSend({ type:'CHARACTER_SELECT', charId:id });
         myCharId = id;
         markSelected(myCharId);
@@ -326,7 +318,7 @@
       }
       function hideRollOverlay(){ rollPanel.classList.add('hidden'); }
 
-      // ---- Trivia Pad (controls only, no question) ----
+      // ======== Trivia Pad ========
       let triviaPadEl = null, triviaPadButtons = [];
       function ensureTriviaPad(){
         if (triviaPadEl) return triviaPadEl;
@@ -382,6 +374,19 @@
         if (!triviaPadEl) return;
         triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
         setTimeout(()=>{ if (triviaPadEl) triviaPadEl.style.display='none'; }, 600);
+      }
+
+      // === trivia handlers (used by both direct + STATE-wrapped messages)
+      function handleTriviaStart(payload){
+        // payload may include deadlineMs/serverOpenTs in some server builds (safe to ignore)
+        showTriviaPad();
+      }
+      function handleTriviaEnd(payload){
+        endTriviaPad();
+        if (payload && payload.winnerId){
+          const coins = Number(payload.awarded || 0);
+          showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
+        }
       }
 
       // ======== Intent (legacy+modern) ========
@@ -577,21 +582,9 @@
             return;
           }
 
-          // === TRIVIA (controls only; question is on host) ===
-          if (type === 'TRIVIA_START') {
-            showTriviaPad();          // show A/B/C/D pad
-            return;
-          }
-          if (type === 'TRIVIA_END') {
-            endTriviaPad();           // hide & lock buttons
-            // Optional: winner toast if provided
-            if (payload && payload.winnerId) {
-              const coins = Number(payload.awarded || 0);
-              showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
-            }
-            return;
-          }
-
+          // === TRIVIA (direct) ===
+          if (type === 'TRIVIA_START') { handleTriviaStart(payload); return; }
+          if (type === 'TRIVIA_END')   { handleTriviaEnd(payload);   return; }
 
           // ---- STATE snapshots ----
           if (msg.type === 'STATE') {
@@ -608,7 +601,6 @@
                 : '—';
               setStatus('Lobby: ' + text, true);
               markTaken(s.taken||[]);
-              // If server says we're not ready (e.g., due to invalidation), sync UI
               const me = players.find(p => (p.playerId && p.playerId===playerId) || (p.name && p.name===(nameInput.value||'').trim()));
               if (me && !!me.ready !== myReady) setReadyUI(!!me.ready);
               return;
@@ -642,6 +634,10 @@
               }
               return;
             }
+
+            // === TRIVIA (STATE-wrapped) ===
+            if (s.type === 'TRIVIA_START') { handleTriviaStart(s); return; }
+            if (s.type === 'TRIVIA_END')   { handleTriviaEnd(s);   return; }
 
             if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
           }
@@ -682,7 +678,6 @@
       }
 
       // ======== UI wiring ========
-      // Character grid delegation (mobile-safe)
       charGrid.addEventListener('click', (e) => {
         const btn = e.target.closest('.charBtn');
         if (!btn || !charGrid.contains(btn)) return;
@@ -691,7 +686,6 @@
         onCharClicked(id);
       }, { passive: true });
 
-      // Ready button (TOGGLE ready <-> unready)
       readyBtn.addEventListener('click', () => {
         if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
           if (!myCharId) showToast('Pick a character first');
@@ -703,18 +697,15 @@
         else sendReady();
       }, { passive: true });
 
-      // Ready pill quick tap (optional quick ready/unready)
       readyPill.addEventListener('click', () => {
         if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) return;
         readyBtn.click();
       }, { passive: true });
 
-      // Unready if the player changes their display name while ready
       nameInput.addEventListener('input', () => {
         if (myReady) sendUnready('Name changed');
       }, { passive:true });
 
-      // Join flow
       $('btnJoin').onclick = async () => {
         roomId = ($('room').value || '').trim().toUpperCase();
         const name = (nameInput.value || '').trim() || 'Player';
@@ -761,23 +752,21 @@
         }
       };
 
-      // Roll button -> adapt to phase
+      // Roll button
       rollBtn.addEventListener('click', ()=>{
         if (!ws) return;
-        // TURN-ORDER phase
         if (inTurnOrder && !myHasRolled) {
-          wsSend({ type:'PLAYER_ROLL' });                        // modern
-          wsSend({ type:'ROLL', phase:'TURN_ORDER' });           // legacy
+          wsSend({ type:'PLAYER_ROLL' });
+          wsSend({ type:'ROLL', phase:'TURN_ORDER' });
           myHasRolled = true;
           rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
           rollState.textContent = 'Rolling…';
           setDbg('PLAYER_ROLL/ROLL (turn-order) sent');
           return;
         }
-        // IN-GAME roll
         if (canRollNow) {
-          wsSend({ type:'ROLL_MOVE' });                          // modern
-          wsSend({ type:'ROLL', phase:'MOVE' });                 // legacy
+          wsSend({ type:'ROLL_MOVE' });
+          wsSend({ type:'ROLL', phase:'MOVE' });
           rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
           rollState.textContent = 'Rolling…';
           setDbg('ROLL_MOVE/ROLL (move) sent');
@@ -789,4 +778,3 @@
     </script>
   </body>
 </html>
-
