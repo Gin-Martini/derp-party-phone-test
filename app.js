@@ -426,6 +426,13 @@
       return false;
     }
 
+    if (resolvedMode === 'FFA') {
+      if (allowedIds.length > 0) return isAllowed(allowedIds);
+      if (explicitAllowAll) return true;
+      // FFA with no explicit allow-list defaults to open to everyone
+      return true;
+    }
+
     if (allowedIds.length > 0) return isAllowed(allowedIds);
     if (explicitAllowAll) return true;
     return false;
