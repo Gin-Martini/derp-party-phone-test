@@ -65,7 +65,7 @@
       /* Trivia pad buttons */
       .tp-btn { font-size:22px;font-weight:700; letter-spacing:.02em; }
     </style>
-    <script>console.log("DerpPhone v9.2 – ready toggle + graceful unready");</script>
+    <script>console.log("DerpPhone v9.3 – removed Show Roll UI test button");</script>
   </head>
   <body>
     <div class="wrap">
@@ -78,7 +78,6 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
-          <button id="btnShowRoll" class="btn-accent" type="button">Show Roll UI</button>
         </div>
       </div>
 
@@ -121,7 +120,7 @@
     (() => {
       // ======== Config (GitHub Pages-safe) ========
       const BASE      = 'https://derpparty-relay.fly.dev';
-      const HTTP_BASE = BASE;                                // ensure https
+      const HTTP_BASE = BASE;
       const WS_URL    = BASE.replace('https','wss') + '/socket';
 
       // ======== State ========
@@ -164,7 +163,6 @@
       function idsEqual(a,b){ return String(a||'').trim() === String(b||'').trim(); }
 
       function enableReadyButton(can){
-        // keep enabled when ready, so it can act as UNREADY toggle
         const shouldEnable = can || myReady;
         readyBtn.disabled = !shouldEnable;
         readyBtn.classList.toggle('btn-disabled', !shouldEnable);
@@ -174,7 +172,6 @@
       function setReadyUI(isReady){
         myReady = !!isReady;
         setReadyPill(myReady);
-        // Toggle button label and styling
         readyBtn.textContent = myReady ? 'Unready' : 'I’m Ready';
         readyBtn.classList.toggle('btn-primary', myReady);
         readyBtn.classList.toggle('btn-accent', !myReady);
@@ -270,9 +267,9 @@
       function sendReady(){
         if (!ws) return;
         if (!myCharId){ showToast('Pick a character first'); return; }
-        if (myReady) return; // already ready
-        wsSend({ type:'PLAYER_READY' });            // modern
-        wsSend({ type:'READY' });                   // legacy
+        if (myReady) return;
+        wsSend({ type:'PLAYER_READY' });
+        wsSend({ type:'READY' });
         setReadyUI(true);
         showToast('✅ Ready');
         log('> PLAYER_READY');
@@ -280,9 +277,9 @@
 
       function sendUnready(reason){
         if (!ws) return;
-        if (!myReady && !reason) return; // nothing to do
-        wsSend({ type:'PLAYER_UNREADY' });         // modern
-        wsSend({ type:'NOT_READY' });              // legacy
+        if (!myReady && !reason) return;
+        wsSend({ type:'PLAYER_UNREADY' });
+        wsSend({ type:'NOT_READY' });
         setReadyUI(false);
         if (reason) showToast('⛔ Unreadied: ' + reason);
         else showToast('⛔ Unready');
@@ -293,11 +290,9 @@
         if (!ws) return;
         if (!id) return;
         if (takenChars.has(id) && id !== myCharId){ showToast('That character is taken.'); return; }
-        // If switching to a different character while Ready -> auto-unready
         if (myReady && id !== myCharId) {
           sendUnready('Changed character');
         }
-        // Selecting same again is fine; still send to server to confirm selection
         wsSend({ type:'CHARACTER_SELECT', charId:id });
         myCharId = id;
         markSelected(myCharId);
@@ -603,7 +598,6 @@
                 : '—';
               setStatus('Lobby: ' + text, true);
               markTaken(s.taken||[]);
-              // If server says we're not ready (e.g., due to invalidation), sync UI
               const me = players.find(p => (p.playerId && p.playerId===playerId) || (p.name && p.name===(nameInput.value||'').trim()));
               if (me && !!me.ready !== myReady) setReadyUI(!!me.ready);
               return;
@@ -677,7 +671,6 @@
       }
 
       // ======== UI wiring ========
-      // Character grid delegation (mobile-safe)
       charGrid.addEventListener('click', (e) => {
         const btn = e.target.closest('.charBtn');
         if (!btn || !charGrid.contains(btn)) return;
@@ -686,7 +679,6 @@
         onCharClicked(id);
       }, { passive: true });
 
-      // Ready button (TOGGLE ready <-> unready)
       readyBtn.addEventListener('click', () => {
         if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
           if (!myCharId) showToast('Pick a character first');
@@ -698,18 +690,15 @@
         else sendReady();
       }, { passive: true });
 
-      // Ready pill quick tap (optional quick ready/unready)
       readyPill.addEventListener('click', () => {
         if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) return;
         readyBtn.click();
       }, { passive: true });
 
-      // Unready if the player changes their display name while ready
       nameInput.addEventListener('input', () => {
         if (myReady) sendUnready('Name changed');
       }, { passive:true });
 
-      // Join flow
       $('btnJoin').onclick = async () => {
         roomId = ($('room').value || '').trim().toUpperCase();
         const name = (nameInput.value || '').trim() || 'Player';
@@ -756,19 +745,13 @@
         }
       };
 
-      // Show roll overlay test (blocked in lobby)
-      $('btnShowRoll').onclick = () => {
-        if (phase !== 'lobby') { showRollOverlay('Test Roll'); showToast('🔧 Test overlay shown'); }
-        else { showToast('Overlay disabled in lobby'); }
-      };
-
       // Roll button -> adapt to phase
       rollBtn.addEventListener('click', ()=>{
         if (!ws) return;
         // TURN-ORDER phase
         if (inTurnOrder && !myHasRolled) {
-          wsSend({ type:'PLAYER_ROLL' });                        // modern
-          wsSend({ type:'ROLL', phase:'TURN_ORDER' });           // legacy
+          wsSend({ type:'PLAYER_ROLL' });
+          wsSend({ type:'ROLL', phase:'TURN_ORDER' });
           myHasRolled = true;
           rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
           rollState.textContent = 'Rolling…';
@@ -777,8 +760,8 @@
         }
         // IN-GAME roll
         if (canRollNow) {
-          wsSend({ type:'ROLL_MOVE' });                          // modern
-          wsSend({ type:'ROLL', phase:'MOVE' });                 // legacy
+          wsSend({ type:'ROLL_MOVE' });
+          wsSend({ type:'ROLL', phase:'MOVE' });
           rollBtn.disabled = true; rollBtn.classList.add('btn-disabled');
           rollState.textContent = 'Rolling…';
           setDbg('ROLL_MOVE/ROLL (move) sent');
