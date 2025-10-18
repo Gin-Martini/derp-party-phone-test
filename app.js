@@ -17,7 +17,7 @@
 
   // Trivia gating (new)
   let triviaAllowed = null;         // null=unknown, true=can answer, false=cannot
-  let triviaMode = 'FFA';           // 'FFA' | 'SOLO' (best effort from payload)
+  let triviaMode = 'PENDING';       // 'FFA' | 'SOLO' | 'PENDING' (best effort from payload)
 
   // ======== DOM ========
   const $ = (id)=>document.getElementById(id);
@@ -256,7 +256,7 @@
     triviaPadButtons = [btnA, btnB, btnC, btnD];
     triviaPadButtons.forEach((b, i)=>{
       b.addEventListener('click', ()=>{
-        if (triviaAllowed === false) { showToast('Not your question.'); return; }
+        if (triviaAllowed !== true) { showToast('Not your question.'); return; }
         triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
         sendIntent('TRIVIA_ANSWER', i);
         showToast('✅ Answer sent');
@@ -267,11 +267,7 @@
     return pad;
   }
   function showTriviaPad(){
-    if (triviaAllowed === false) {
-      endTriviaPad();
-      return;
-    }
-    if (triviaMode === 'SOLO' && triviaAllowed !== true) {
+    if (triviaAllowed !== true) {
       endTriviaPad();
       return;
     }
@@ -282,14 +278,19 @@
   function endTriviaPad(){
     if (!triviaPadEl) return;
     triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
-    setTimeout(()=>{ if (triviaPadEl) triviaPadEl.style.display='none'; }, 600);
+    triviaPadEl.style.display='none';
   }
 
   // === SOLO/FFA gating helpers ===
   function computeTriviaEligibility(payload){
     if (!payload || typeof payload !== 'object') {
-      triviaMode = 'FFA';
-      return true;
+      triviaMode = 'PENDING';
+      return false;
+    }
+
+    if (!hasTriviaHints(payload)) {
+      triviaMode = 'PENDING';
+      return null;
     }
 
     const collectIds = (raw) => {
@@ -343,6 +344,9 @@
     ];
     const allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
 
+    const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
+    const explicitAllowAll = allowAllFlags.some((v) => v === true || String(v).toLowerCase() === 'all');
+
     const soloHintSources = [
       payload.soloPlayerId,
       payload.targetPlayerId,
@@ -372,8 +376,10 @@
       else if (isFfaFlag) resolvedMode = 'FFA';
     }
     if (!resolvedMode) {
-      if (soloHints.length > 0 || fallbackIds.length > 0 || allowedIds.length === 1) resolvedMode = 'SOLO';
-      else resolvedMode = 'FFA';
+      if (explicitAllowAll) resolvedMode = 'FFA';
+      else if (soloHints.length > 0 || fallbackIds.length > 0 || allowedIds.length === 1) resolvedMode = 'SOLO';
+      else if (allowedIds.length > 1) resolvedMode = 'FFA';
+      else resolvedMode = 'SOLO';
     }
 
     triviaMode = resolvedMode;
@@ -391,7 +397,8 @@
     }
 
     if (allowedIds.length > 0) return isAllowed(allowedIds);
-    return true;
+    if (explicitAllowAll) return true;
+    return false;
   }
 
   function hasTriviaHints(payload) {
@@ -413,22 +420,23 @@
     const hintful = hasTriviaHints(payload);
     if (!hintful && opts.quiet && triviaAllowed != null) {
       if (triviaAllowed) showTriviaPad();
-      else if (triviaMode === 'SOLO') endTriviaPad();
+      else endTriviaPad();
       return;
     }
 
-    triviaAllowed = computeTriviaEligibility(payload);
-    if (triviaAllowed) {
+    const eligibility = computeTriviaEligibility(payload);
+    triviaAllowed = eligibility;
+    if (eligibility === true) {
       showTriviaPad();
     } else {
       endTriviaPad();
-      if (!opts.quiet) showToast('Trivia in progress…');
+      if (eligibility === false && !opts.quiet) showToast('Trivia in progress…');
     }
   }
 
   // ======== Intent (legacy+modern) ========
   function sendIntent(intentType, value){
-    if (intentType === 'TRIVIA_ANSWER' && triviaAllowed === false) return;
+    if (intentType === 'TRIVIA_ANSWER' && triviaAllowed !== true) return;
     wsSend({ type:'INTENT', intent:intentType, value:String(value) }); // legacy
     wsSend({ type:intentType, optionIndex:Number(value) });            // typed DTO
   }
@@ -636,7 +644,7 @@
       if (type === 'TRIVIA_END') {
         endTriviaPad();
         triviaAllowed = null;
-        triviaMode = 'FFA';
+        triviaMode = 'PENDING';
         if (payload && payload.winnerId) {
           const coins = Number(payload.awarded || 0);
           showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
@@ -653,7 +661,7 @@
           showTriviaPadIfAllowed(s.trivia, { quiet:true }); return;
         }
         if (s.trivia && (s.trivia.closed === true || s.trivia.phase === 'end' || s.trivia.phase === 'closed' || s.trivia.phase === 'result')) {
-          endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
+          endTriviaPad(); triviaAllowed = null; triviaMode = 'PENDING'; return;
         }
 
         if (stateType === 'TRIVIA_START' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
@@ -661,7 +669,7 @@
           return;
         }
         if (stateType === 'TRIVIA_END' || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
-          endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
+          endTriviaPad(); triviaAllowed = null; triviaMode = 'PENDING'; return;
         }
 
         if (stateType === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
@@ -745,7 +753,7 @@
       enableReadyButton(false);
       setReadyUI(false);
       canRollNow = false; inTurnOrder = false; myHasRolled = false;
-      triviaAllowed = null; triviaMode = 'FFA';
+      triviaAllowed = null; triviaMode = 'PENDING';
       setPhase('lobby');
       if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
       if (triviaPadEl) triviaPadEl.style.display='none';
