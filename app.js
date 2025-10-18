@@ -395,6 +395,7 @@
 
   function normType(t){
     if(!t) return t;
+    const upper = String(t).trim().toUpperCase();
     const m = {
       'TURNORDER_START':'TURN_ORDER_START',
       'TURNORDER_ROLL':'TURN_ORDER_FEEDBACK',
@@ -423,7 +424,12 @@
       'TRIVIA_RESULT':'TRIVIA_END',
       'ANSWER_WINDOW_CLOSE':'TRIVIA_END',
     };
-    return m[t] || t;
+    if (m[upper]) return m[upper];
+    if (upper.startsWith('SOLO_')) {
+      const base = upper.slice(5);
+      return m[base] || base;
+    }
+    return upper;
   }
 
   // ======== Message router ========
@@ -601,6 +607,7 @@
       // ---- STATE snapshots / legacy trivia paths ----
       if (msg.type === 'STATE') {
         const s = msg.state || {};
+        const stateType = normType(s.type);
 
         if (s.trivia && (s.trivia.open === true || s.trivia.phase === 'start' || s.trivia.phase === 'open')) {
           showTriviaPadIfAllowed(s.trivia); return;
@@ -609,17 +616,17 @@
           endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
         }
 
-        if (s.type === 'ANSWER_WINDOW_OPEN' || s.type === 'TRIVIA_OPEN' || s.type === 'TRIVIA_PROMPT' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
+        if (stateType === 'TRIVIA_START' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
           if (triviaAllowed === true || triviaMode !== 'SOLO') showTriviaPad();
           return;
         }
-        if (s.type === 'ANSWER_WINDOW_CLOSE' || s.type === 'TRIVIA_DONE' || s.type === 'TRIVIA_CLOSE' || s.type === 'TRIVIA_RESULT' || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
+        if (stateType === 'TRIVIA_END' || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
           endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
         }
 
-        if (s.type === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
+        if (stateType === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
 
-        if (s.type === 'LOBBY_STATE') {
+        if (stateType === 'LOBBY_STATE') {
           setPhase('lobby');
           hideRollOverlay();
           const players = s.players||[];
@@ -637,12 +644,12 @@
           return;
         }
 
-        if (s.type === 'CHARACTER_TAKEN') { takenChars.add(String(s.charId)); markTaken([...takenChars]); return; }
-        if (s.type === 'CHARACTER_PICKED') { applyCharacterPicked(s.playerId, s.charId); return; }
-        if (s.type === 'READY_OPEN')  { showToast('Ready phase open'); return; }
-        if (s.type === 'READY_CLOSE') { showToast('Ready closed'); return; }
+        if (stateType === 'CHARACTER_TAKEN') { takenChars.add(String(s.charId)); markTaken([...takenChars]); return; }
+        if (stateType === 'CHARACTER_PICKED') { applyCharacterPicked(s.playerId, s.charId); return; }
+        if (stateType === 'READY_OPEN')  { showToast('Ready phase open'); return; }
+        if (stateType === 'READY_CLOSE') { showToast('Ready closed'); return; }
 
-        if (s.type === 'LOBBY_LOCKED') {
+        if (stateType === 'LOBBY_LOCKED') {
           setStatus('Game starting…', true);
           setReadyUI(false);
           lobbyArea.classList.add('hidden');
@@ -652,7 +659,7 @@
           return;
         }
 
-        if (s.type === 'TURN_STATE' || s.type === 'CURRENT_TURN') {
+        if (stateType === 'TURN_STATE' || stateType === 'CURRENT_TURN') {
           if (phase === 'lobby') return;
           const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
           if (!pid) return;
