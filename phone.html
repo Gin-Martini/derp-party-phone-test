@@ -577,6 +577,22 @@
             return;
           }
 
+          // === TRIVIA (controls only; question is on host) ===
+          if (type === 'TRIVIA_START') {
+            showTriviaPad();          // show A/B/C/D pad
+            return;
+          }
+          if (type === 'TRIVIA_END') {
+            endTriviaPad();           // hide & lock buttons
+            // Optional: winner toast if provided
+            if (payload && payload.winnerId) {
+              const coins = Number(payload.awarded || 0);
+              showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
+            }
+            return;
+          }
+
+
           // ---- STATE snapshots ----
           if (msg.type === 'STATE') {
             const s = msg.state || {};
@@ -773,3 +789,4 @@
     </script>
   </body>
 </html>
+
