@@ -535,12 +535,16 @@
     }
 
     if (soloSanitized.startsWith('SOLOTRIVIA')) {
-      const base = 'TRIVIA' + soloSanitized.slice('SOLOTRIVIA'.length);
+      const remainder = soloSanitized.slice('SOLOTRIVIA'.length);
+      const normalizedRemainder = remainder && !remainder.startsWith('_') ? '_' + remainder : remainder;
+      const base = 'TRIVIA' + normalizedRemainder;
       return m[base] || base;
     }
 
     if (upper.startsWith('SOLOTRIVIA')) {
-      const base = 'TRIVIA' + upper.slice('SOLOTRIVIA'.length);
+      const remainder = upper.slice('SOLOTRIVIA'.length);
+      const normalizedRemainder = remainder && !remainder.startsWith('_') ? '_' + remainder : remainder;
+      const base = 'TRIVIA' + normalizedRemainder;
       return m[base] || base;
     }
     return upper;
