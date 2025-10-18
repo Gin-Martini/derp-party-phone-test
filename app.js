@@ -402,13 +402,35 @@
     return true; // FFA fallback
   }
 
-  function showTriviaPadIfAllowed(payload){
+  function hasTriviaHints(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    const hintKeys = [
+      'mode', 'triviaMode', 'answerMode',
+      'isSolo', 'solo', 'soloMode',
+      'isFfa', 'ffa', 'freeForAll',
+      'allowedPlayerIds', 'allowedPlayers', 'allowedIds', 'allowed', 'allow', 'participants',
+      'allowedPlayerId', 'participantIds',
+      'soloPlayerId', 'targetPlayerId', 'activePlayerId',
+      'promptPlayerId', 'promptedPlayerId', 'focusPlayerId', 'challengePlayerId',
+      'soloPlayer'
+    ];
+    return hintKeys.some((key) => Object.prototype.hasOwnProperty.call(payload, key) && payload[key] != null);
+  }
+
+  function showTriviaPadIfAllowed(payload, opts = {}){
+    const hintful = hasTriviaHints(payload);
+    if (!hintful && opts.quiet && triviaAllowed != null) {
+      if (triviaAllowed) showTriviaPad();
+      else if (triviaMode === 'SOLO') endTriviaPad();
+      return;
+    }
+
     triviaAllowed = computeTriviaEligibility(payload);
     if (triviaAllowed) {
       showTriviaPad();
     } else {
       endTriviaPad();
-      showToast('Trivia in progress…');
+      if (!opts.quiet) showToast('Trivia in progress…');
     }
   }
 
@@ -636,14 +658,14 @@
         const stateType = normType(s.type);
 
         if (s.trivia && (s.trivia.open === true || s.trivia.phase === 'start' || s.trivia.phase === 'open')) {
-          showTriviaPadIfAllowed(s.trivia); return;
+          showTriviaPadIfAllowed(s.trivia, { quiet:true }); return;
         }
         if (s.trivia && (s.trivia.closed === true || s.trivia.phase === 'end' || s.trivia.phase === 'closed' || s.trivia.phase === 'result')) {
           endTriviaPad(); triviaAllowed = null; triviaMode = 'FFA'; return;
         }
 
         if (stateType === 'TRIVIA_START' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) {
-          if (triviaAllowed === true || triviaMode !== 'SOLO') showTriviaPad();
+          showTriviaPadIfAllowed(s, { quiet:true });
           return;
         }
         if (stateType === 'TRIVIA_END' || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) {
