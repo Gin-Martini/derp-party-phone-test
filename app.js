@@ -538,6 +538,11 @@
       const base = 'TRIVIA' + soloSanitized.slice('SOLOTRIVIA'.length);
       return m[base] || base;
     }
+
+    if (upper.startsWith('SOLOTRIVIA')) {
+      const base = 'TRIVIA' + upper.slice('SOLOTRIVIA'.length);
+      return m[base] || base;
+    }
     return upper;
   }
 
