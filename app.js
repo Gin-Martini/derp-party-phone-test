@@ -1,4 +1,4 @@
-// app.js — DerpPhone v10.0.6 (DOM-safe wiring + reconnect + terminal session handling)
+// app.js — DerpPhone v10.0.7 (DOM-safe wiring + reconnect + terminal session handling + hard reset)
 'use strict';
 
 (() => {
@@ -20,7 +20,7 @@
   let rollPanel, rollBtn, rollTitle, rollState, rollValue, orderResult;
 
   // ======== Reconnect/session ========
-  const SESSION_KEY = 'dp.session.v1';
+  const SESSION_KEY = 'dp.session.v2'; // bumped to force-clear old sessions
   let shouldReconnect = false;
   let reconnectTimer = 0;
   let reconnectAttempts = 0;
@@ -272,6 +272,10 @@
     showToast('🔒 ' + reason, 1800);
   }
 
+  // Hard reset (manual/local): export for console and URL kill-switch
+  function hardReset(reason = 'Manual reset') { endSession(reason); }
+  window.dpReset = hardReset;
+
   // ======== Socket lifecycle ========
   function attachWsHandlers(sock){
     sock.onopen = () => {
@@ -393,7 +397,7 @@
       const payload = inner;
       setDbg(type || 'unknown');
 
-      // ===== NEW: terminal signals =====
+      // ===== terminal signals =====
       if (type === 'ROOM_CLOSED' || type === 'SESSION_END' || type === 'GAME_ENDED') {
         endSession(payload.reason || 'Host ended the session');
         return;
@@ -402,7 +406,6 @@
         const pid = (payload.playerId || payload.id || '').trim();
         if (!pid || idsEqual(pid, playerId)) { endSession('You were removed by the host'); return; }
       }
-      // ===== END NEW =====
 
       if (type === 'TEXT' && payload.message) showToast(payload.message);
 
@@ -461,7 +464,7 @@
       if (type === 'YOUR_TURN') {
         setPhase('in_game');
         const pid   = (payload.playerId || payload.id || '').trim();
-        const pname = (payload.name || '').trim();
+        aconst pname = (payload.name || '').trim();
         const isPidMatch  = (pid && pid === playerId);
         const theNameValue = (nameInput?.value||'').trim();
         const isNameMatch = (pname && pname === theNameValue);
@@ -830,6 +833,19 @@
       setStatus('Reconnect canceled — use Join to re-enter');
     });
 
+    // Hidden hard-reset gesture on Status: triple tap or long-press
+    let _tapCount = 0, _lastTap = 0, _pressTo;
+    statusEl?.addEventListener('click', () => {
+      const now = Date.now();
+      _tapCount = (now - _lastTap < 350) ? _tapCount + 1 : 1;
+      _lastTap = now;
+      if (_tapCount >= 3) { hardReset('manual triple-tap'); _tapCount = 0; }
+    });
+    statusEl?.addEventListener('touchstart', () => {
+      _pressTo = setTimeout(() => hardReset('manual long-press'), 800);
+    }, { passive:true });
+    statusEl?.addEventListener('touchend', () => clearTimeout(_pressTo), { passive:true });
+
     // Character grid
     charGrid?.addEventListener('click', (e) => {
       const btn = e.target.closest('.charBtn');
@@ -959,6 +975,13 @@
   function boot(){
     initDom();
     bindUi();
+
+    // URL kill-switch: ?reset / #reset / ?wipe / ?clear
+    if (/(^|[?#&])(reset|wipe|clear)(=1)?/i.test(location.search + location.hash)) {
+      hardReset('URL reset');
+      return;
+    }
+
     tryAutoResume();
   }
 
