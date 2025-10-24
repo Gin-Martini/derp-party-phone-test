@@ -89,17 +89,35 @@ statusEl?.addEventListener('click', () => {
   let triviaAllowed = null;         // null=unknown, true=can answer, false=cannot
   let triviaMode = 'PENDING';       // 'FFA' | 'SOLO' | 'PENDING' (best effort from payload)
 
-  // ======== DOM ========
-  const $ = (id)=>document.getElementById(id);
-  const logEl = $('log');
-  const statusEl = $('status');
-  const joinCard = $('joinCard');
-  const lobbyArea = $('lobbyArea');
-  const readyBtn = $('btnReady');
-  const readyPill = $('readyPill');
-  const charGrid = $('charGrid');
-  const nameInput = $('name');
-  const dbg = $('dbg');
+// ======== DOM ========
+const $ = (id)=>document.getElementById(id);
+const logEl     = $('log');
+const statusEl  = $('status');
+const joinCard  = $('joinCard');
+const lobbyArea = $('lobbyArea');
+const readyBtn  = $('btnReady');
+const readyPill = $('readyPill');
+const charGrid  = $('charGrid');
+const nameInput = $('name');
+const dbg       = $('dbg');
+
+// (moved here) Optional cancel control
+statusEl?.addEventListener('click', () => {
+  if (!shouldReconnect || !reconnectTimer) return;
+  cancelReconnect();
+  setStatus('Reconnect canceled — use Join to re-enter');
+});
+
+// Join button (add reconnect cancel up front)
+$('btnJoin').onclick = async () => {
+  cancelReconnect();                // <- ensure manual join wins
+  shouldReconnect = false;
+
+  roomId = ($('room').value || '').trim().toUpperCase();
+  const name = (nameInput.value || '').trim() || 'Player';
+  if (!roomId) { alert('Enter room code.'); return; }
+
+  setStatus('Joining…', true);
 
   const rollPanel = $('turnOrder');
   const rollBtn   = $('btnRoll');
