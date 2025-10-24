@@ -764,7 +764,7 @@
       cancelReconnect();
       setStatus('Reconnect canceled — use Join to re-enter');
     });
-
+  
     // Character grid
     charGrid?.addEventListener('click', (e) => {
       const btn = e.target.closest('.charBtn');
@@ -773,7 +773,7 @@
       if (!id) return;
       onCharClicked(id);
     }, { passive: true });
-
+  
     // Ready
     readyBtn?.addEventListener('click', () => {
       if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
@@ -785,24 +785,33 @@
       if (myReady) sendUnready();
       else sendReady();
     }, { passive: true });
-
+  
     readyPill?.addEventListener('click', () => {
       if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) return;
       readyBtn.click();
     }, { passive: true });
-
+  
     nameInput?.addEventListener('input', () => {
       if (myReady) sendUnready('Name changed');
     }, { passive:true });
-
-    // Join
+  
+    // Join (click)
     $('btnJoin')?.addEventListener('click', onJoinClicked, { passive:true });
-
+  
+    // >>> NEW: Join on Enter in the room field <<<
+    const roomEl = $('room');
+    if (roomEl) {
+      roomEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') onJoinClicked();
+      });
+    }
+    // >>> END NEW <<<
+  
     // Roll
     rollBtn?.addEventListener('click', ()=>{
       if (!ws) return;
       if (!allowRollButton()) { updateRollUI(); return; }
-
+  
       if (inTurnOrder && !myHasRolled) {
         wsSend({ type:'PLAYER_ROLL' });
         wsSend({ type:'ROLL', phase:'TURN_ORDER' });
@@ -823,21 +832,26 @@
     }, { passive:true });
   }
 
-  async function onJoinClicked(){
-    cancelReconnect();                // ensure manual join wins
+  async function onJoinClicked() {
+    cancelReconnect();
     shouldReconnect = false;
-
-    roomId = ($('room').value || '').trim().toUpperCase();
-    const name = (nameInput?.value || '').trim() || 'Player';
-    if (!roomId) { alert('Enter room code.'); return; }
-
+  
+    const roomEl = $('room');
+    if (!roomEl) { showToast('Room input not found. Refresh the page.'); return; }
+  
+    roomId = String(roomEl.value || '').trim().toUpperCase();
+    const name = String(nameInput?.value || '').trim() || 'Player';
+    if (!roomId) { showToast('Enter room code.'); return; }
+  
+    const btn = $('btnJoin');
+    if (btn) { btn.disabled = true; btn.classList.add('btn-disabled'); }
     setStatus('Joining…', true);
-
+  
     try {
-      const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
+      const resp = await fetch(`${HTTP_BASE}/rooms/${encodeURIComponent(roomId)}/join`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name })
       });
       if (!resp.ok) {
         const txt = await resp.text().catch(() => '<no body>');
@@ -854,18 +868,30 @@
         showToast('Join failed: bad server response.');
         return;
       }
-      log('Got playerId: ' + playerId);
       shouldReconnect = true;
       saveSession();
+      connectWs(); // HELLO on open
     } catch (e) {
       log('HTTP error: ' + e);
       setStatus('HTTP error');
       showToast('Network error while joining.');
-      return;
+    } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove('btn-disabled'); }
     }
-
-    connectWs();
+  } // <-- function ends here; nothing else in between
+  
+  function tryAutoResume(){
+    const sess = loadSession();
+    if (sess) {
+      roomId   = sess.roomId;
+      playerId = sess.playerId;
+      if (nameInput) nameInput.value = sess.name || 'Player';
+      setStatus('Reconnecting…', true);
+      shouldReconnect = true;
+      connectWs();
+    }
   }
+
 
   function tryAutoResume(){
     const sess = loadSession();
