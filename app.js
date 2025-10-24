@@ -243,28 +243,53 @@
   // ======== Socket lifecycle ========
   function attachWsHandlers(sock){
     sock.onopen = () => {
+      _terminal = false;
       shouldReconnect = true;
       reconnectAttempts = 0;
+  
       setPhase('lobby');
       wsSend({ type: 'HELLO_PLAYER', roomId, playerId, name: (nameInput?.value||'').trim() || 'Player' });
       setStatus('Connected.', true);
       joinCard?.classList.add('hidden');
       setLobbyVisible(true);
       ensureGridVisible();
-
+  
       saveSession();
-
+  
       clearInterval(hbInterval);
       hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
       updateRollUI();
     };
+  
     sock.onmessage = onSocketMessage;
-    sock.onclose = () => {
+  
+    sock.onclose = (e) => {
       clearInterval(hbInterval);
       triviaAllowed = null; triviaMode = 'PENDING';
-      setPhase('lobby');
-      setDbg('WS closed');
-
+  
+      // If we already terminated via broadcast, just bail.
+      if (_terminal) return;
+  
+      const code = Number(e.code || 0);
+      const reason = String(e.reason || '').toUpperCase();
+  
+      const reasonLooksTerminal =
+        reason.includes('ROOM_CLOSED') ||
+        reason.includes('SESSION')     ||
+        reason.includes('KICK')        ||
+        reason.includes('EXPIRE')      ||
+        reason.includes('FORBIDDEN')   ||
+        reason.includes('UNAUTHORIZED');
+  
+      const isTerminal = TERMINAL_CLOSE_CODES.has(code) || reasonLooksTerminal;
+  
+      if (isTerminal) {
+        endSession(e.reason || 'Session closed');
+        return;
+      }
+  
+      // Non-terminal close: try to reconnect if allowed
+      setDbg('WS closed ' + code + ' ' + (e.reason || ''));
       if (shouldReconnect && roomId && playerId) {
         setLobbyVisible(false);
         joinCard?.classList.add('hidden');
@@ -272,6 +297,22 @@
         updateRollUI();
         return;
       }
+  
+      // Hard offline / session cleared
+      setStatus('Disconnected');
+      setLobbyVisible(false);
+      joinCard?.classList.remove('hidden');
+      myReady = false; myCharId = null; takenChars.clear();
+      if (charGrid) charGrid.innerHTML = '';
+      enableReadyButton(false);
+      setReadyUI(false);
+      canRollNow = false; inTurnOrder = false; myHasRolled = false;
+      if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
+      if (triviaPadEl) triviaPadEl.style.display='none';
+      updateRollUI();
+    };
+  }
+
 
       // Hard offline / session cleared
       setStatus('Disconnected');
@@ -288,6 +329,52 @@
     };
   }
 
+  // ======== Session termination (host closed / kicked / expired) ========
+  const TERMINAL_CLOSE_CODES = new Set([
+    4000, // generic room closed
+    4001, // ROOM_CLOSED
+    4002, // GAME_ENDED
+    4003, // KICKED / BANNED
+    4401, // UNAUTHORIZED
+    4403, // FORBIDDEN
+    4410, // SESSION_EXPIRED
+    4411, // ROOM_NOT_FOUND
+  ]);
+  
+  let _terminal = false;
+  
+  function endSession(reason = 'Session closed') {
+    _terminal = true;
+    shouldReconnect = false;
+    reconnectAttempts = 0;
+  
+    // clear persisted session
+    try { clearSession(); } catch (_) {}
+  
+    // close socket quietly
+    try { ws && ws.close(); } catch (_) {}
+    ws = null;
+  
+    // reset UI to Join state
+    setStatus(reason);
+    setPhase('lobby');
+    setLobbyVisible(false);
+    joinCard?.classList.remove('hidden');
+  
+    myReady = false; myCharId = null; takenChars.clear();
+    if (charGrid) charGrid.innerHTML = '';
+    enableReadyButton(false);
+    setReadyUI(false);
+  
+    canRollNow = false; inTurnOrder = false; myHasRolled = false;
+    if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
+    if (triviaPadEl) triviaPadEl.style.display='none';
+    updateRollUI();
+  
+    showToast('🔒 ' + reason, 1800);
+  }
+
+  
   // ======== Message router ========
   function normType(t){
     if(!t) return t;
@@ -336,6 +423,26 @@
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'PONG') return;
+  
+      const isWrapped = (msg && msg.type === 'STATE' && msg.state);
+      const inner = isWrapped ? msg.state : msg;
+      const type = normType(inner.type || msg.type);
+      const payload = inner;
+      setDbg(type || 'unknown');
+  
+      // >>> NEW: handle terminal server signals
+      if (type === 'ROOM_CLOSED' || type === 'SESSION_END' || type === 'GAME_ENDED') {
+        endSession(payload.reason || 'Host ended the session');
+        return;
+      }
+      if (type === 'KICKED' || type === 'PLAYER_KICKED') {
+        // if payload targets me explicitly, or if broadcast
+        const pid = (payload.playerId || payload.id || '').trim();
+        if (!pid || idsEqual(pid, playerId)) {
+          endSession('You were removed by the host');
+          return;
+        }
+      }
 
       if (msg.type === 'CHARACTER_CATALOG') {
         renderCatalog(msg.entries || msg.list || msg.characters || []);
