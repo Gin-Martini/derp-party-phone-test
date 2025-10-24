@@ -1,4 +1,4 @@
-// app.js — DerpPhone v10.0.4
+// app.js — DerpPhone v10.0.5 (DOM-safe wiring + reconnect)
 'use strict';
 
 (() => {
@@ -15,28 +15,52 @@
   let myHasRolled = false, inTurnOrder = false, canRollNow = false;
   let phase = 'lobby'; // 'lobby' | 'turn_order' | 'in_game'
 
-  // ======== DOM ========
-  const $ = (id)=>document.getElementById(id);
-  const logEl     = $('log');
-  const statusEl  = $('status');
-  const joinCard  = $('joinCard');
-  const lobbyArea = $('lobbyArea');
-  const readyBtn  = $('btnReady');
-  const readyPill = $('readyPill');
-  const charGrid  = $('charGrid');
-  const nameInput = $('name');
-  const dbg       = $('dbg');
+  // ======== DOM refs (assigned in initDom) ========
+  let $, logEl, statusEl, joinCard, lobbyArea, readyBtn, readyPill, charGrid, nameInput, dbg;
+  let rollPanel, rollBtn, rollTitle, rollState, rollValue, orderResult;
 
-  // Turn/roll UI (module-scope; referenced across handlers)
-  const rollPanel   = $('turnOrder');
-  const rollBtn     = $('btnRoll');
-  const rollTitle   = $('rollTitle');
-  const rollState   = $('rollState');
-  const rollValue   = $('rollValue');
-  const orderResult = $('orderResult');
+  // ======== Reconnect/session ========
+  const SESSION_KEY = 'dp.session.v1';
+  let shouldReconnect = false;
+  let reconnectTimer = 0;
+  let reconnectAttempts = 0;
+  const backoff = (n) => Math.min(15000, 500 * Math.pow(1.8, n)) + Math.floor(Math.random()*150);
 
-  // Remove any legacy dev button if present
-  (document.getElementById('btnShowRoll') || { remove:()=>{} }).remove();
+  function saveSession() {
+    if (!roomId || !playerId) return;
+    const name = (nameInput?.value || '').trim() || 'Player';
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, playerId, name })); } catch (_) {}
+  }
+  function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch (_) {} }
+  function loadSession() {
+    try {
+      const j = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+      return (j && j.roomId && j.playerId) ? j : null;
+    } catch (_) { return null; }
+  }
+  function scheduleReconnect(reason) {
+    if (!shouldReconnect || !roomId || !playerId) return;
+    setStatus(`Reconnecting… (${reason||'lost connection'})`, true);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    const wait = backoff(reconnectAttempts++);
+    reconnectTimer = setTimeout(()=> {
+      reconnectTimer = 0;
+      connectWs(); // sends HELLO on open
+    }, wait);
+  }
+  function cancelReconnect() {
+    shouldReconnect = false;
+    reconnectAttempts = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = 0; }
+  }
+  function connectWs() {
+    try {
+      ws = new WebSocket(WS_URL);
+      attachWsHandlers(ws);
+    } catch (e) {
+      scheduleReconnect('ws construct failed');
+    }
+  }
 
   // ======== UI helpers ========
   function setPhase(p){ phase = p; setDbg('phase=' + p); }
@@ -112,7 +136,7 @@
         };
         portrait.appendChild(img);
       } else {
-        const fb=document.createElement('div'); fb.className='fallback'; fb.textContent=label.slice(0,2).toUpperCase();
+        const fb=document.createElement('div'); fb.className = 'fallback'; fb.textContent = label.slice(0,2).toUpperCase();
         portrait.appendChild(fb);
       }
 
@@ -151,7 +175,7 @@
     });
   }
 
-  // ======== READY / net helpers ========
+  // ======== Intent helpers ========
   function wsSend(obj){
     try{ ws && ws.readyState===1 && ws.send(JSON.stringify(obj)); }catch(_){ /*no-op*/ }
   }
@@ -189,7 +213,7 @@
     enableReadyButton(true);
   }
 
-  // ======== ROLL overlay ========
+  // ======== Roll overlay ========
   function allowRollButton(){
     if (phase === 'lobby') return false;
     if (inTurnOrder) return !myHasRolled;
@@ -216,246 +240,55 @@
   }
   function hideRollOverlay(){ if(rollPanel) rollPanel.classList.add('hidden'); }
 
-  // ======== Reconnect/session ========
-  const SESSION_KEY = 'dp.session.v1';
-  let shouldReconnect = false;
-  let reconnectTimer = 0;
-  let reconnectAttempts = 0;
-  const backoff = (n) => Math.min(15000, 500 * Math.pow(1.8, n)) + Math.floor(Math.random()*150);
+  // ======== Socket lifecycle ========
+  function attachWsHandlers(sock){
+    sock.onopen = () => {
+      shouldReconnect = true;
+      reconnectAttempts = 0;
+      setPhase('lobby');
+      wsSend({ type: 'HELLO_PLAYER', roomId, playerId, name: (nameInput?.value||'').trim() || 'Player' });
+      setStatus('Connected.', true);
+      joinCard?.classList.add('hidden');
+      setLobbyVisible(true);
+      ensureGridVisible();
 
-  function saveSession() {
-    if (!roomId || !playerId) return;
-    const name = (nameInput?.value || '').trim() || 'Player';
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, playerId, name })); } catch (_) {}
-  }
-  function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch (_) {} }
-  function loadSession() {
-    try {
-      const j = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
-      return (j && j.roomId && j.playerId) ? j : null;
-    } catch (_) { return null; }
-  }
-  function scheduleReconnect(reason) {
-    if (!shouldReconnect || !roomId || !playerId) return;
-    setStatus(`Reconnecting… (${reason||'lost connection'})`, true);
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    const wait = backoff(reconnectAttempts++);
-    reconnectTimer = setTimeout(()=> {
-      reconnectTimer = 0;
-      connectWs(); // sends HELLO on open
-    }, wait);
-  }
-  function cancelReconnect() {
-    shouldReconnect = false;
-    reconnectAttempts = 0;
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = 0; }
-  }
-  function connectWs() {
-    try {
-      ws = new WebSocket(WS_URL);
-      attachWsHandlers(ws);
-    } catch (e) {
-      scheduleReconnect('ws construct failed');
-    }
-  }
+      saveSession();
 
-  // Tap status pill to cancel a pending reconnect
-  statusEl?.addEventListener('click', () => {
-    if (!shouldReconnect || !reconnectTimer) return;
-    cancelReconnect();
-    setStatus('Reconnect canceled — use Join to re-enter');
-  });
+      clearInterval(hbInterval);
+      hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
+      updateRollUI();
+    };
+    sock.onmessage = onSocketMessage;
+    sock.onclose = () => {
+      clearInterval(hbInterval);
+      triviaAllowed = null; triviaMode = 'PENDING';
+      setPhase('lobby');
+      setDbg('WS closed');
 
-  // ======== Trivia gating ========
-  let triviaAllowed = null;         // null=unknown, true=can answer, false=cannot
-  let triviaMode = 'PENDING';       // 'FFA' | 'SOLO' | 'PENDING'
-  let triviaPadEl = null, triviaPadButtons = [];
-
-  function ensureTriviaPad(){
-    if (triviaPadEl) return triviaPadEl;
-    const pad = document.createElement('div');
-    pad.id = 'triviaPad';
-    pad.style.cssText = `position:fixed; inset:0; z-index:10010; display:none; background:rgba(0,0,0,.5);`;
-    pad.innerHTML = `
-      <div style="
-        position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-        width:min(520px,92%); background:#141418; border:1px solid #2a2a32;
-        border-radius:16px; padding:16px; display:flex;flex-direction:column; gap:12px;">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <div class="pill">Trivia — choose</div>
-          <button id="tpClose" type="button" style="background:#1f2937;border:1px solid #374151;color:#e5e7eb;padding:6px 10px;border-radius:10px">Hide</button>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <button class="tp-btn btn-primary" id="tpA" type="button">A</button>
-          <button class="tp-btn btn-primary" id="tpB" type="button">B</button>
-          <button class="tp-btn btn-primary" id="tpC" type="button">C</button>
-          <button class="tp-btn btn-primary" id="tpD" type="button">D</button>
-        </div>
-        <div style="font-size:12px;color:#9aa0a6">Answers lock after you tap.</div>
-      </div>`;
-    document.body.appendChild(pad);
-    pad.querySelector('#tpClose').addEventListener('click', ()=>{ pad.style.display='none'; }, { passive:true });
-
-    const btnA = pad.querySelector('#tpA');
-    const btnB = pad.querySelector('#tpB');
-    const btnC = pad.querySelector('#tpC');
-    const btnD = pad.querySelector('#tpD');
-    triviaPadButtons = [btnA, btnB, btnC, btnD];
-    triviaPadButtons.forEach((b, i)=>{
-      b.addEventListener('click', ()=>{
-        if (triviaAllowed !== true) { showToast('Not your question.'); return; }
-        triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
-        sendIntent('TRIVIA_ANSWER', i);
-        showToast('✅ Answer sent');
-      }, { passive:true });
-    });
-
-    triviaPadEl = pad;
-    return pad;
-  }
-  function showTriviaPad(){
-    if (triviaAllowed !== true) { endTriviaPad(); return; }
-    const pad = ensureTriviaPad();
-    triviaPadButtons.forEach(bb=>{ bb.disabled = false; bb.classList.remove('btn-disabled'); });
-    pad.style.display = 'block';
-  }
-  function endTriviaPad(){
-    if (!triviaPadEl) return;
-    triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
-    triviaPadEl.style.display='none';
-  }
-
-  function hasTriviaHints(payload) {
-    if (!payload || typeof payload !== 'object') return false;
-    const hintKeys = [
-      'mode', 'triviaMode', 'answerMode', 'type',
-      'isSolo', 'solo', 'soloMode',
-      'isFfa', 'ffa', 'freeForAll',
-      'allowedPlayerIds', 'allowedPlayers', 'allowedIds', 'allowed', 'allow', 'participants',
-      'allowedPlayerId', 'participantIds',
-      'soloPlayerId', 'targetPlayerId', 'activePlayerId',
-      'promptPlayerId', 'promptedPlayerId', 'focusPlayerId', 'challengePlayerId',
-      'soloPlayer'
-    ];
-    return hintKeys.some((key) => Object.prototype.hasOwnProperty.call(payload, key) && payload[key] != null);
-  }
-
-  function computeTriviaEligibility(payload){
-    if (!payload || typeof payload !== 'object') { triviaMode = 'PENDING'; return false; }
-    if (!hasTriviaHints(payload)) { triviaMode = 'PENDING'; return null; }
-
-    const collectIds = (raw) => {
-      if (raw == null) return [];
-      if (Array.isArray(raw)) return raw.flatMap(collectIds).filter(Boolean);
-      if (typeof raw === 'object') {
-        const direct = raw.playerId || raw.id || raw.value || raw.key || raw.targetPlayerId || raw.soloPlayerId;
-        if (direct != null) return collectIds(direct);
-        const keys = Object.keys(raw);
-        if (!keys.length) return [];
-        const boolKeys = keys.filter((k) => typeof raw[k] === 'boolean');
-        if (boolKeys.length === keys.length) return boolKeys.filter((k) => raw[k]);
-        return keys.flatMap((k) => collectIds(raw[k])).filter(Boolean);
+      if (shouldReconnect && roomId && playerId) {
+        setLobbyVisible(false);
+        joinCard?.classList.add('hidden');
+        scheduleReconnect('socket closed');
+        updateRollUI();
+        return;
       }
-      if (typeof raw === 'string') return raw.includes(',') ? raw.split(',').map(s=>s.trim()).filter(Boolean) : [raw.trim()];
-      if (typeof raw === 'number' || typeof raw === 'bigint') return [String(raw)];
-      return [];
+
+      // Hard offline / session cleared
+      setStatus('Disconnected');
+      setLobbyVisible(false);
+      joinCard?.classList.remove('hidden');
+      myReady = false; myCharId = null; takenChars.clear();
+      if (charGrid) charGrid.innerHTML = '';
+      enableReadyButton(false);
+      setReadyUI(false);
+      canRollNow = false; inTurnOrder = false; myHasRolled = false;
+      if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
+      if (triviaPadEl) triviaPadEl.style.display='none';
+      updateRollUI();
     };
-
-    const normalizeMode = (value) => {
-      if (value == null) return '';
-      const cleaned = String(value).trim().toUpperCase().replace(/[^A-Z]/g, '');
-      if (!cleaned) return '';
-      if (cleaned === 'SOLO' || cleaned.startsWith('SOLO') || cleaned.includes('TRIVIASOLO')) return 'SOLO';
-      if (cleaned === 'FFA' || cleaned === 'FREEFORALL' || cleaned === 'EVERYONE' || cleaned === 'ALLPLAYERS' || cleaned.includes('FREEFORALL')) return 'FFA';
-      return '';
-    };
-    const normalizeToken = (v) => String(v ?? '').trim().toLowerCase().replace(/[^a-z0-9*]/g, '');
-    const allowAllTokens = new Set(['all','*','everyone','everybody','allplayers','anyone','anybody','any','ffa','open']);
-
-    const allowedSources = [
-      payload.allowed, payload.allowedPlayerIds, payload.allowedPlayers, payload.allowedIds,
-      payload.allow, payload.participants, payload.allowedPlayerId, payload.participantIds,
-      payload.playerIds, payload.players,
-    ];
-    let allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
-    const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
-    const explicitAllowAllFromFlags = allowAllFlags.some((v) => v === true || allowAllTokens.has(normalizeToken(v)));
-    const normalizedAllowed = allowedIds.map(normalizeToken);
-    const allowAllFromAllowed = normalizedAllowed.some((t)=>allowAllTokens.has(t));
-    if (allowAllFromAllowed) allowedIds = allowedIds.filter((_, i)=>!allowAllTokens.has(normalizedAllowed[i]));
-    const explicitAllowAll = explicitAllowAllFromFlags || allowAllFromAllowed;
-
-    const soloHints = [
-      payload.soloPlayerId, payload.targetPlayerId, payload.activePlayerId, payload.promptPlayerId,
-      payload.promptedPlayerId, payload.focusPlayerId, payload.challengePlayerId, payload.soloPlayer
-    ].flatMap(collectIds).filter(Boolean);
-
-    const fallbackIds = [payload.playerId, payload.player].flatMap(collectIds).filter(Boolean);
-
-    const explicitMode =
-      normalizeMode(payload.mode) || normalizeMode(payload.triviaMode) ||
-      normalizeMode(payload.answerMode) || normalizeMode(payload.type);
-    const isSoloFlag = payload.isSolo === true || payload.solo === true || payload.soloMode === true;
-    const isFfaFlag  = payload.isFfa  === true || payload.ffa  === true || payload.freeForAll === true;
-
-    let resolvedMode = explicitMode;
-    if (!resolvedMode) {
-      if (isSoloFlag) resolvedMode = 'SOLO';
-      else if (isFfaFlag) resolvedMode = 'FFA';
-    }
-    if (!resolvedMode) {
-      if (explicitAllowAll) resolvedMode = 'FFA';
-      else if (soloHints.length > 0 || fallbackIds.length > 0 || allowedIds.length === 1) resolvedMode = 'SOLO';
-      else if (allowedIds.length > 1) resolvedMode = 'FFA';
-      else resolvedMode = 'SOLO';
-    }
-    triviaMode = resolvedMode;
-
-    const myId = playerId || '';
-    const isAllowed = (list) => list.some((id) => idsEqual(id, myId));
-    const soloTarget = soloHints.find(Boolean) || fallbackIds.find(Boolean) || (allowedIds.length === 1 ? allowedIds[0] : '');
-
-    if (resolvedMode === 'SOLO') {
-      if (soloTarget && !idsEqual(soloTarget, myId)) return false;
-      if (allowedIds.length > 0) return isAllowed(allowedIds);
-      if (soloHints.length > 0) return isAllowed(soloHints);
-      if (fallbackIds.length > 0) return isAllowed(fallbackIds);
-      return false;
-    }
-    if (resolvedMode === 'FFA') {
-      if (allowedIds.length > 0) return isAllowed(allowedIds);
-      if (explicitAllowAll) return true;
-      return true;
-    }
-    if (allowedIds.length > 0) return isAllowed(allowedIds);
-    if (explicitAllowAll) return true;
-    return false;
   }
 
-  function showTriviaPadIfAllowed(payload, opts = {}){
-    const hintful = hasTriviaHints(payload);
-    if (!hintful && opts.quiet && triviaAllowed != null) {
-      if (triviaAllowed) showTriviaPad();
-      else endTriviaPad();
-      return;
-    }
-    const eligibility = computeTriviaEligibility(payload);
-    triviaAllowed = eligibility;
-    if (eligibility === true) showTriviaPad();
-    else {
-      endTriviaPad();
-      if (eligibility === false && !opts.quiet) showToast('Trivia in progress…');
-    }
-  }
-
-  // ======== Intent (legacy+modern) ========
-  function sendIntent(intentType, value){
-    if (intentType === 'TRIVIA_ANSWER' && triviaAllowed !== true) return;
-    wsSend({ type:'INTENT', intent:intentType, value:String(value) }); // legacy
-    wsSend({ type:intentType, optionIndex:Number(value) });            // typed DTO
-  }
-
-  // ======== Type normalization ========
+  // ======== Message router ========
   function normType(t){
     if(!t) return t;
     const upper = String(t).trim().toUpperCase();
@@ -498,7 +331,6 @@
     return upper;
   }
 
-  // ======== Message router ========
   function onSocketMessage(ev){
     log('< ' + ev.data);
     try {
@@ -713,98 +545,285 @@
     } catch(e) { console.error(e); }
   }
 
-  // ======== Socket lifecycle ========
-  function attachWsHandlers(sock){
-    sock.onopen = () => {
-      shouldReconnect = true;
-      reconnectAttempts = 0;
-      setPhase('lobby');
-      wsSend({ type: 'HELLO_PLAYER', roomId, playerId, name: (nameInput?.value||'').trim() || 'Player' });
-      setStatus('Connected.', true);
-      joinCard?.classList.add('hidden');
-      setLobbyVisible(true);
-      ensureGridVisible();
+  // ======== Trivia gating (controls only) ========
+  let triviaAllowed = null;         // null=unknown, true=can answer, false=cannot
+  let triviaMode = 'PENDING';       // 'FFA' | 'SOLO' | 'PENDING'
+  let triviaPadEl = null, triviaPadButtons = [];
 
-      saveSession();
+  function ensureTriviaPad(){
+    if (triviaPadEl) return triviaPadEl;
+    const pad = document.createElement('div');
+    pad.id = 'triviaPad';
+    pad.style.cssText = `position:fixed; inset:0; z-index:10010; display:none; background:rgba(0,0,0,.5);`;
+    pad.innerHTML = `
+      <div style="
+        position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+        width:min(520px,92%); background:#141418; border:1px solid #2a2a32;
+        border-radius:16px; padding:16px; display:flex;flex-direction:column; gap:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="pill">Trivia — choose</div>
+          <button id="tpClose" type="button" style="background:#1f2937;border:1px solid #374151;color:#e5e7eb;padding:6px 10px;border-radius:10px">Hide</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <button class="tp-btn btn-primary" id="tpA" type="button">A</button>
+          <button class="tp-btn btn-primary" id="tpB" type="button">B</button>
+          <button class="tp-btn btn-primary" id="tpC" type="button">C</button>
+          <button class="tp-btn btn-primary" id="tpD" type="button">D</button>
+        </div>
+        <div style="font-size:12px;color:#9aa0a6">Answers lock after you tap.</div>
+      </div>`;
+    document.body.appendChild(pad);
+    pad.querySelector('#tpClose').addEventListener('click', ()=>{ pad.style.display='none'; }, { passive:true });
 
-      clearInterval(hbInterval);
-      hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
-      updateRollUI();
-    };
-    sock.onmessage = onSocketMessage;
-    sock.onclose = () => {
-      clearInterval(hbInterval);
-      triviaAllowed = null; triviaMode = 'PENDING';
-      setPhase('lobby');
-      setDbg('WS closed');
+    const btnA = pad.querySelector('#tpA');
+    const btnB = pad.querySelector('#tpB');
+    const btnC = pad.querySelector('#tpC');
+    const btnD = pad.querySelector('#tpD');
+    triviaPadButtons = [btnA, btnB, btnC, btnD];
+    triviaPadButtons.forEach((b, i)=>{
+      b.addEventListener('click', ()=>{
+        if (triviaAllowed !== true) { showToast('Not your question.'); return; }
+        triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
+        sendIntent('TRIVIA_ANSWER', i);
+        showToast('✅ Answer sent');
+      }, { passive:true });
+    });
 
-      if (shouldReconnect && roomId && playerId) {
-        setLobbyVisible(false);
-        joinCard?.classList.add('hidden');
-        scheduleReconnect('socket closed');
-        updateRollUI();
-        return;
-      }
-
-      // Hard offline / session cleared
-      setStatus('Disconnected');
-      setLobbyVisible(false);
-      joinCard?.classList.remove('hidden');
-      myReady = false; myCharId = null; takenChars.clear();
-      if (charGrid) charGrid.innerHTML = '';
-      enableReadyButton(false);
-      setReadyUI(false);
-      canRollNow = false; inTurnOrder = false; myHasRolled = false;
-      if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
-      if (triviaPadEl) triviaPadEl.style.display='none';
-      updateRollUI();
-    };
+    triviaPadEl = pad;
+    return pad;
+  }
+  function showTriviaPad(){
+    if (triviaAllowed !== true) { endTriviaPad(); return; }
+    const pad = ensureTriviaPad();
+    triviaPadButtons.forEach(bb=>{ bb.disabled = false; bb.classList.remove('btn-disabled'); });
+    pad.style.display = 'block';
+  }
+  function endTriviaPad(){
+    if (!triviaPadEl) return;
+    triviaPadButtons.forEach(bb=>{ bb.disabled = true; bb.classList.add('btn-disabled'); });
+    triviaPadEl.style.display='none';
   }
 
-  // ======== Auto-resume on load ========
-  document.addEventListener('DOMContentLoaded', () => {
-    const sess = loadSession();
-    if (sess) {
-      roomId   = sess.roomId;
-      playerId = sess.playerId;
-      if (nameInput) nameInput.value = sess.name || 'Player';
-      setStatus('Reconnecting…', true);
-      shouldReconnect = true;
-      connectWs();
+  function hasTriviaHints(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    const hintKeys = [
+      'mode', 'triviaMode', 'answerMode', 'type',
+      'isSolo', 'solo', 'soloMode',
+      'isFfa', 'ffa', 'freeForAll',
+      'allowedPlayerIds', 'allowedPlayers', 'allowedIds', 'allowed', 'allow', 'participants',
+      'allowedPlayerId', 'participantIds',
+      'soloPlayerId', 'targetPlayerId', 'activePlayerId',
+      'promptPlayerId', 'promptedPlayerId', 'focusPlayerId', 'challengePlayerId',
+      'soloPlayer'
+    ];
+    return hintKeys.some((key) => Object.prototype.hasOwnProperty.call(payload, key) && payload[key] != null);
+  }
+
+  function computeTriviaEligibility(payload){
+    if (!payload || typeof payload !== 'object') { triviaMode = 'PENDING'; return false; }
+    if (!hasTriviaHints(payload)) { triviaMode = 'PENDING'; return null; }
+
+    const collectIds = (raw) => {
+      if (raw == null) return [];
+      if (Array.isArray(raw)) return raw.flatMap(collectIds).filter(Boolean);
+      if (typeof raw === 'object') {
+        const direct = raw.playerId || raw.id || raw.value || raw.key || raw.targetPlayerId || raw.soloPlayerId;
+        if (direct != null) return collectIds(direct);
+        const keys = Object.keys(raw);
+        if (!keys.length) return [];
+        const boolKeys = keys.filter((k) => typeof raw[k] === 'boolean');
+        if (boolKeys.length === keys.length) return boolKeys.filter((k) => raw[k]);
+        return keys.flatMap((k) => collectIds(raw[k])).filter(Boolean);
+      }
+      if (typeof raw === 'string') return raw.includes(',') ? raw.split(',').map(s=>s.trim()).filter(Boolean) : [raw.trim()];
+      if (typeof raw === 'number' || typeof raw === 'bigint') return [String(raw)];
+      return [];
+    };
+
+    const normalizeMode = (value) => {
+      if (value == null) return '';
+      const cleaned = String(value).trim().toUpperCase().replace(/[^A-Z]/g, '');
+      if (!cleaned) return '';
+      if (cleaned === 'SOLO' || cleaned.startsWith('SOLO') || cleaned.includes('TRIVIASOLO')) return 'SOLO';
+      if (cleaned === 'FFA' || cleaned === 'FREEFORALL' || cleaned === 'EVERYONE' || cleaned === 'ALLPLAYERS' || cleaned.includes('FREEFORALL')) return 'FFA';
+      return '';
+    };
+    const normalizeToken = (v) => String(v ?? '').trim().toLowerCase().replace(/[^a-z0-9*]/g, '');
+    const allowAllTokens = new Set(['all','*','everyone','everybody','allplayers','anyone','anybody','any','ffa','open']);
+
+    const allowedSources = [
+      payload.allowed, payload.allowedPlayerIds, payload.allowedPlayers, payload.allowedIds,
+      payload.allow, payload.participants, payload.allowedPlayerId, payload.participantIds,
+      payload.playerIds, payload.players,
+    ];
+    let allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
+    const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
+    const explicitAllowAllFromFlags = allowAllFlags.some((v) => v === true || allowAllTokens.has(normalizeToken(v)));
+    const normalizedAllowed = allowedIds.map(normalizeToken);
+    const allowAllFromAllowed = normalizedAllowed.some((t)=>allowAllTokens.has(t));
+    if (allowAllFromAllowed) allowedIds = allowedIds.filter((_, i)=>!allowAllTokens.has(normalizedAllowed[i]));
+    const explicitAllowAll = explicitAllowAllFromFlags || allowAllFromAllowed;
+
+    const soloHints = [
+      payload.soloPlayerId, payload.targetPlayerId, payload.activePlayerId, payload.promptPlayerId,
+      payload.promptedPlayerId, payload.focusPlayerId, payload.challengePlayerId, payload.soloPlayer
+    ].flatMap(collectIds).filter(Boolean);
+
+    const fallbackIds = [payload.playerId, payload.player].flatMap(collectIds).filter(Boolean);
+
+    const explicitMode =
+      normalizeMode(payload.mode) || normalizeMode(payload.triviaMode) ||
+      normalizeMode(payload.answerMode) || normalizeMode(payload.type);
+    const isSoloFlag = payload.isSolo === true || payload.solo === true || payload.soloMode === true;
+    const isFfaFlag  = payload.isFfa  === true || payload.ffa  === true || payload.freeForAll === true;
+
+    let resolvedMode = explicitMode;
+    if (!resolvedMode) {
+      if (isSoloFlag) resolvedMode = 'SOLO';
+      else if (isFfaFlag) resolvedMode = 'FFA';
     }
-  });
+    if (!resolvedMode) {
+      if (explicitAllowAll) resolvedMode = 'FFA';
+      else if (soloHints.length > 0 || fallbackIds.length > 0 || allowedIds.length === 1) resolvedMode = 'SOLO';
+      else if (allowedIds.length > 1) resolvedMode = 'FFA';
+      else resolvedMode = 'SOLO';
+    }
+    triviaMode = resolvedMode;
 
-  // ======== UI wiring ========
-  charGrid?.addEventListener('click', (e) => {
-    const btn = e.target.closest('.charBtn');
-    if (!btn || !charGrid.contains(btn)) return;
-    const id = btn.dataset.charId;
-    if (!id) return;
-    onCharClicked(id);
-  }, { passive: true });
+    const myId = playerId || '';
+    const isAllowed = (list) => list.some((id) => idsEqual(id, myId));
+    const soloTarget = soloHints.find(Boolean) || fallbackIds.find(Boolean) || (allowedIds.length === 1 ? allowedIds[0] : '');
 
-  readyBtn?.addEventListener('click', () => {
-    if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
-      if (!myCharId) showToast('Pick a character first');
-      else showToast('Still waiting for lobby to open');
+    if (resolvedMode === 'SOLO') {
+      if (soloTarget && !idsEqual(soloTarget, myId)) return false;
+      if (allowedIds.length > 0) return isAllowed(allowedIds);
+      if (soloHints.length > 0) return isAllowed(soloHints);
+      if (fallbackIds.length > 0) return isAllowed(fallbackIds);
+      return false;
+    }
+    if (resolvedMode === 'FFA') {
+      if (allowedIds.length > 0) return isAllowed(allowedIds);
+      if (explicitAllowAll) return true;
+      return true;
+    }
+    if (allowedIds.length > 0) return isAllowed(allowedIds);
+    if (explicitAllowAll) return true;
+    return false;
+  }
+
+  function showTriviaPadIfAllowed(payload, opts = {}){
+    const hintful = hasTriviaHints(payload);
+    if (!hintful && opts.quiet && triviaAllowed != null) {
+      if (triviaAllowed) showTriviaPad();
+      else endTriviaPad();
       return;
     }
-    if (!ws) return;
-    if (myReady) sendUnready();
-    else sendReady();
-  }, { passive: true });
+    const eligibility = computeTriviaEligibility(payload);
+    triviaAllowed = eligibility;
+    if (eligibility === true) showTriviaPad();
+    else {
+      endTriviaPad();
+      if (eligibility === false && !opts.quiet) showToast('Trivia in progress…');
+    }
+  }
 
-  readyPill?.addEventListener('click', () => {
-    if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) return;
-    readyBtn.click();
-  }, { passive: true });
+  function sendIntent(intentType, value){
+    if (intentType === 'TRIVIA_ANSWER' && triviaAllowed !== true) return;
+    wsSend({ type:'INTENT', intent:intentType, value:String(value) }); // legacy
+    wsSend({ type:intentType, optionIndex:Number(value) });            // typed DTO
+  }
 
-  nameInput?.addEventListener('input', () => {
-    if (myReady) sendUnready('Name changed');
-  }, { passive:true });
+  // ======== Boot: DOM init + listeners + auto-resume ========
+  function initDom() {
+    $ = (id)=>document.getElementById(id);
+    logEl     = $('log');
+    statusEl  = $('status');
+    joinCard  = $('joinCard');
+    lobbyArea = $('lobbyArea');
+    readyBtn  = $('btnReady');
+    readyPill = $('readyPill');
+    charGrid  = $('charGrid');
+    nameInput = $('name');
+    dbg       = $('dbg');
 
-  // Join button (single handler; reconnect-safe)
-  $('btnJoin')?.addEventListener('click', async () => {
+    rollPanel   = $('turnOrder');
+    rollBtn     = $('btnRoll');
+    rollTitle   = $('rollTitle');
+    rollState   = $('rollState');
+    rollValue   = $('rollValue');
+    orderResult = $('orderResult');
+
+    // remove any legacy dev button if present
+    (document.getElementById('btnShowRoll') || { remove:()=>{} }).remove();
+  }
+
+  function bindUi() {
+    // Cancel a pending reconnect by tapping the status pill
+    statusEl?.addEventListener('click', () => {
+      if (!shouldReconnect || !reconnectTimer) return;
+      cancelReconnect();
+      setStatus('Reconnect canceled — use Join to re-enter');
+    });
+
+    // Character grid
+    charGrid?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.charBtn');
+      if (!btn || !charGrid.contains(btn)) return;
+      const id = btn.dataset.charId;
+      if (!id) return;
+      onCharClicked(id);
+    }, { passive: true });
+
+    // Ready
+    readyBtn?.addEventListener('click', () => {
+      if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
+        if (!myCharId) showToast('Pick a character first');
+        else showToast('Still waiting for lobby to open');
+        return;
+      }
+      if (!ws) return;
+      if (myReady) sendUnready();
+      else sendReady();
+    }, { passive: true });
+
+    readyPill?.addEventListener('click', () => {
+      if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) return;
+      readyBtn.click();
+    }, { passive: true });
+
+    nameInput?.addEventListener('input', () => {
+      if (myReady) sendUnready('Name changed');
+    }, { passive:true });
+
+    // Join
+    $('btnJoin')?.addEventListener('click', onJoinClicked, { passive:true });
+
+    // Roll
+    rollBtn?.addEventListener('click', ()=>{
+      if (!ws) return;
+      if (!allowRollButton()) { updateRollUI(); return; }
+
+      if (inTurnOrder && !myHasRolled) {
+        wsSend({ type:'PLAYER_ROLL' });
+        wsSend({ type:'ROLL', phase:'TURN_ORDER' });
+        myHasRolled = true;
+        rollState.textContent = 'Rolling…';
+        updateRollUI();
+        setDbg('PLAYER_ROLL/ROLL (turn-order) sent');
+        return;
+      }
+      if (canRollNow) {
+        wsSend({ type:'ROLL_MOVE' });
+        wsSend({ type:'ROLL', phase:'MOVE' });
+        rollState.textContent = 'Rolling…';
+        canRollNow = false;
+        updateRollUI();
+        setDbg('ROLL_MOVE/ROLL (move) sent');
+      }
+    }, { passive:true });
+  }
+
+  async function onJoinClicked(){
     cancelReconnect();                // ensure manual join wins
     shouldReconnect = false;
 
@@ -846,30 +865,25 @@
     }
 
     connectWs();
-  }, { passive:true });
+  }
 
-  // Roll button
-  rollBtn?.addEventListener('click', ()=>{
-    if (!ws) return;
-    if (!allowRollButton()) { updateRollUI(); return; }
-
-    if (inTurnOrder && !myHasRolled) {
-      wsSend({ type:'PLAYER_ROLL' });
-      wsSend({ type:'ROLL', phase:'TURN_ORDER' });
-      myHasRolled = true;
-      rollState.textContent = 'Rolling…';
-      updateRollUI();
-      setDbg('PLAYER_ROLL/ROLL (turn-order) sent');
-      return;
+  function tryAutoResume(){
+    const sess = loadSession();
+    if (sess) {
+      roomId   = sess.roomId;
+      playerId = sess.playerId;
+      if (nameInput) nameInput.value = sess.name || 'Player';
+      setStatus('Reconnecting…', true);
+      shouldReconnect = true;
+      connectWs();
     }
-    if (canRollNow) {
-      wsSend({ type:'ROLL_MOVE' });
-      wsSend({ type:'ROLL', phase:'MOVE' });
-      rollState.textContent = 'Rolling…';
-      canRollNow = false;
-      updateRollUI();
-      setDbg('ROLL_MOVE/ROLL (move) sent');
-    }
-  }, { passive:true });
+  }
 
-})(); // end IIFE
+  function boot(){
+    initDom();
+    bindUi();
+    tryAutoResume();
+  }
+
+  document.addEventListener('DOMContentLoaded', boot);
+})();
