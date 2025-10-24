@@ -1,5 +1,4 @@
-<!-- app.js (DerpPhone v10.0.3) -->
-<script type="module">
+// app.js — DerpPhone v10.0.4
 'use strict';
 
 (() => {
@@ -36,7 +35,7 @@
   const rollValue   = $('rollValue');
   const orderResult = $('orderResult');
 
-  // Remove any legacy “show roll” dev button if present
+  // Remove any legacy dev button if present
   (document.getElementById('btnShowRoll') || { remove:()=>{} }).remove();
 
   // ======== UI helpers ========
@@ -260,7 +259,7 @@
     }
   }
 
-  // Single place to cancel reconnect by tapping status pill
+  // Tap status pill to cancel a pending reconnect
   statusEl?.addEventListener('click', () => {
     if (!shouldReconnect || !reconnectTimer) return;
     cancelReconnect();
