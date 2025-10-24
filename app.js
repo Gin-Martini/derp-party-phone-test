@@ -1,4 +1,4 @@
-// app.js — DerpPhone v10.0.7 (DOM-safe wiring + reconnect + terminal session handling + hard reset)
+// app.js — DerpPhone v10.0.8 (rehydrate-on-connect, manual reset, terminal handling)
 'use strict';
 
 (() => {
@@ -272,9 +272,27 @@
     showToast('🔒 ' + reason, 1800);
   }
 
-  // Hard reset (manual/local): export for console and URL kill-switch
-  function hardReset(reason = 'Manual reset') { endSession(reason); }
+  // ======== Rehydrate helpers (fix "stuck in lobby" cases) ========
+  let rehydrateTimer = 0;
+  function requestRehydrate(tag){
+    setDbg('rehydrate:' + (tag||''));
+    wsSend({ type:'REQUEST_SNAPSHOT' });
+    wsSend({ type:'REQUEST_CATALOG' });
+    wsSend({ type:'LOBBY_SNAPSHOT' }); // some hosts listen to this alias
+  }
+  function scheduleRehydrate(ms=900){
+    if (rehydrateTimer) clearTimeout(rehydrateTimer);
+    rehydrateTimer = setTimeout(()=>{
+      const empty = !charGrid || charGrid.children.length === 0;
+      requestRehydrate('timer1');
+      if (empty) setTimeout(()=>{
+        if (!charGrid || charGrid.children.length === 0) requestRehydrate('timer2');
+      }, 1500);
+    }, ms);
+  }
+  function hardReset(reason='Manual reset'){ endSession(reason); }
   window.dpReset = hardReset;
+  window.dpRehydrate = ()=>requestRehydrate('manual');
 
   // ======== Socket lifecycle ========
   function attachWsHandlers(sock){
@@ -294,6 +312,9 @@
       clearInterval(hbInterval);
       hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
       updateRollUI();
+
+      // NEW: proactively rehydrate if host didn’t push immediately
+      scheduleRehydrate(300);
     };
     sock.onmessage = onSocketMessage;
     sock.onclose = (e) => {
@@ -397,6 +418,12 @@
       const payload = inner;
       setDbg(type || 'unknown');
 
+      // NEW: treat welcome/connected as a cue to rehydrate
+      if (type === 'WELCOME' || type === 'HELLO' || type === 'CONNECTED') {
+        scheduleRehydrate(0);
+        return;
+      }
+
       // ===== terminal signals =====
       if (type === 'ROOM_CLOSED' || type === 'SESSION_END' || type === 'GAME_ENDED') {
         endSession(payload.reason || 'Host ended the session');
@@ -464,7 +491,7 @@
       if (type === 'YOUR_TURN') {
         setPhase('in_game');
         const pid   = (payload.playerId || payload.id || '').trim();
-        aconst pname = (payload.name || '').trim();
+        const pname = (payload.name || '').trim();   // FIX: remove stray "a" char
         const isPidMatch  = (pid && pid === playerId);
         const theNameValue = (nameInput?.value||'').trim();
         const isNameMatch = (pname && pname === theNameValue);
