@@ -15,6 +15,76 @@
   let myHasRolled = false, inTurnOrder = false, canRollNow = false;
   let phase = 'lobby'; // 'lobby' | 'turn_order' | 'in_game'
 
+  // ======== Reconnect/session (NEW) ========
+  const SESSION_KEY = 'dp.session.v1';
+  let shouldReconnect = false;
+  let reconnectTimer = 0;
+  let reconnectAttempts = 0;
+  const backoff = (n) => Math.min(15000, 500 * Math.pow(1.8, n)) + Math.floor(Math.random()*150);
+  
+  function saveSession() {
+    if (!roomId || !playerId) return;
+    const name = (nameInput.value || '').trim() || 'Player';
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, playerId, name })); } catch (_) {}
+  }
+  
+  function clearSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch (_) {}
+  }
+  
+  function loadSession() {
+    try {
+      const j = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+      return (j && j.roomId && j.playerId) ? j : null;
+    } catch (_) { return null; }
+  }
+  
+  function scheduleReconnect(reason) {
+    if (!shouldReconnect || !roomId || !playerId) return;
+    setStatus(`Reconnecting… (${reason||'lost connection'})`, true);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    const wait = backoff(reconnectAttempts++);
+    reconnectTimer = setTimeout(()=> {
+      reconnectTimer = 0;
+      connectWs(); // will send HELLO_PLAYER on open via attachWsHandlers
+    }, wait);
+  }
+  
+  function cancelReconnect() {
+    shouldReconnect = false;
+    reconnectAttempts = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = 0; }
+  }
+  
+  function connectWs() {
+    try {
+      ws = new WebSocket(WS_URL);
+      attachWsHandlers(ws);
+    } catch (e) {
+      scheduleReconnect('ws construct failed');
+    }
+  }
+  
+  // Try auto-resume on load
+  document.addEventListener('DOMContentLoaded', () => {
+    const sess = loadSession();
+    if (sess) {
+      roomId   = sess.roomId;
+      playerId = sess.playerId;
+      if (nameInput) nameInput.value = sess.name || 'Player';
+      setStatus('Reconnecting…', true);
+      shouldReconnect = true;
+      connectWs();
+    }
+  });
+
+// Optional cancel control: tap status pill to cancel reconnect (long-press UX could be better later)
+statusEl?.addEventListener('click', () => {
+  if (!shouldReconnect || !reconnectTimer) return;
+  cancelReconnect();
+  setStatus('Reconnect canceled — use Join to re-enter');
+});
+
   // Trivia gating (new)
   let triviaAllowed = null;         // null=unknown, true=can answer, false=cannot
   let triviaMode = 'PENDING';       // 'FFA' | 'SOLO' | 'PENDING' (best effort from payload)
@@ -797,33 +867,49 @@
   // ======== Socket lifecycle ========
   function attachWsHandlers(sock){
     sock.onopen = () => {
+      shouldReconnect = true;           // NEW
+      reconnectAttempts = 0;            // NEW
       setPhase('lobby');
       wsSend({ type: 'HELLO_PLAYER', roomId, playerId, name: (nameInput.value||'').trim() || 'Player' });
-      setStatus('Connected. In Lobby.', true);
+      setStatus('Connected.', true);
       joinCard.classList.add('hidden');
       setLobbyVisible(true);
       ensureGridVisible();
-
+  
+      saveSession();                    // NEW
+  
       clearInterval(hbInterval);
       hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
       updateRollUI();
     };
     sock.onmessage = onSocketMessage;
     sock.onclose = () => {
+      // Don't immediately wipe everything; try to recover first
+      clearInterval(hbInterval);
+      triviaAllowed = null; triviaMode = 'PENDING';
+      setPhase('lobby');
+      setDbg('WS closed');
+  
+      if (shouldReconnect && roomId && playerId) {
+        // Keep the lobby UI hidden while we attempt reconnect; show a status pill instead
+        setLobbyVisible(false);
+        joinCard.classList.add('hidden');
+        scheduleReconnect('socket closed');   // NEW
+        updateRollUI();
+        return;
+      }
+  
+      // Fallback: truly offline or session cleared — show Join
       setStatus('Disconnected');
       setLobbyVisible(false);
       joinCard.classList.remove('hidden');
-      clearInterval(hbInterval);
       myReady = false; myCharId = null; takenChars.clear();
       charGrid.innerHTML = '';
       enableReadyButton(false);
       setReadyUI(false);
       canRollNow = false; inTurnOrder = false; myHasRolled = false;
-      triviaAllowed = null; triviaMode = 'PENDING';
-      setPhase('lobby');
       if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
       if (triviaPadEl) triviaPadEl.style.display='none';
-      setDbg('WS closed');
       updateRollUI();
     };
   }
@@ -861,9 +947,9 @@
     roomId = ($('room').value || '').trim().toUpperCase();
     const name = (nameInput.value || '').trim() || 'Player';
     if (!roomId) { alert('Enter room code.'); return; }
-
+  
     setStatus('Joining…', true);
-
+  
     try {
       const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
         method: 'POST',
@@ -886,21 +972,16 @@
         return;
       }
       log('Got playerId: ' + playerId);
+      shouldReconnect = true;      // NEW
+      saveSession();               // NEW
     } catch (e) {
       log('HTTP error: ' + e);
       setStatus('HTTP error');
       showToast('Network error while joining.');
       return;
     }
-
-    try {
-      ws = new WebSocket(WS_URL);
-      attachWsHandlers(ws);
-    } catch (e) {
-      log('WS construct error: ' + e);
-      setStatus('WebSocket error');
-      return;
-    }
+  
+    connectWs();                   // NEW (instead of new WebSocket + attach here)
   };
 
   // Roll button
