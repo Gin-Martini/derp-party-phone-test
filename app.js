@@ -1,4 +1,4 @@
-// app.js — DerpPhone v10.0.5 (DOM-safe wiring + reconnect)
+// app.js — DerpPhone v10.0.6 (DOM-safe wiring + reconnect + terminal session handling)
 'use strict';
 
 (() => {
@@ -57,7 +57,7 @@
     try {
       ws = new WebSocket(WS_URL);
       attachWsHandlers(ws);
-    } catch (e) {
+    } catch {
       scheduleReconnect('ws construct failed');
     }
   }
@@ -240,39 +240,66 @@
   }
   function hideRollOverlay(){ if(rollPanel) rollPanel.classList.add('hidden'); }
 
+  // ======== Session termination (host closed / kicked / expired) ========
+  const TERMINAL_CLOSE_CODES = new Set([4000,4001,4002,4003,4401,4403,4410,4411]);
+  let _terminal = false;
+
+  function endSession(reason = 'Session closed') {
+    _terminal = true;
+    shouldReconnect = false;
+    reconnectAttempts = 0;
+
+    try { clearSession(); } catch {}
+
+    try { ws && ws.close(); } catch {}
+    ws = null;
+
+    setStatus(reason);
+    setPhase('lobby');
+    setLobbyVisible(false);
+    joinCard?.classList.remove('hidden');
+
+    myReady = false; myCharId = null; takenChars.clear();
+    if (charGrid) charGrid.innerHTML = '';
+    enableReadyButton(false);
+    setReadyUI(false);
+
+    canRollNow = false; inTurnOrder = false; myHasRolled = false;
+    if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
+    if (triviaPadEl) triviaPadEl.style.display='none';
+    updateRollUI();
+
+    showToast('🔒 ' + reason, 1800);
+  }
+
   // ======== Socket lifecycle ========
   function attachWsHandlers(sock){
     sock.onopen = () => {
       _terminal = false;
       shouldReconnect = true;
       reconnectAttempts = 0;
-  
       setPhase('lobby');
       wsSend({ type: 'HELLO_PLAYER', roomId, playerId, name: (nameInput?.value||'').trim() || 'Player' });
       setStatus('Connected.', true);
       joinCard?.classList.add('hidden');
       setLobbyVisible(true);
       ensureGridVisible();
-  
+
       saveSession();
-  
+
       clearInterval(hbInterval);
       hbInterval = setInterval(() => wsSend({ type:'PING' }), 5000);
       updateRollUI();
     };
-  
     sock.onmessage = onSocketMessage;
-  
     sock.onclose = (e) => {
       clearInterval(hbInterval);
       triviaAllowed = null; triviaMode = 'PENDING';
-  
-      // If we already terminated via broadcast, just bail.
-      if (_terminal) return;
-  
+
+      if (_terminal) return; // already handled by broadcast
+
       const code = Number(e.code || 0);
       const reason = String(e.reason || '').toUpperCase();
-  
       const reasonLooksTerminal =
         reason.includes('ROOM_CLOSED') ||
         reason.includes('SESSION')     ||
@@ -280,15 +307,12 @@
         reason.includes('EXPIRE')      ||
         reason.includes('FORBIDDEN')   ||
         reason.includes('UNAUTHORIZED');
-  
+
       const isTerminal = TERMINAL_CLOSE_CODES.has(code) || reasonLooksTerminal;
-  
-      if (isTerminal) {
-        endSession(e.reason || 'Session closed');
-        return;
-      }
-  
-      // Non-terminal close: try to reconnect if allowed
+
+      if (isTerminal) { endSession(e.reason || 'Session closed'); return; }
+
+      // Non-terminal → attempt reconnect if allowed
       setDbg('WS closed ' + code + ' ' + (e.reason || ''));
       if (shouldReconnect && roomId && playerId) {
         setLobbyVisible(false);
@@ -297,22 +321,6 @@
         updateRollUI();
         return;
       }
-  
-      // Hard offline / session cleared
-      setStatus('Disconnected');
-      setLobbyVisible(false);
-      joinCard?.classList.remove('hidden');
-      myReady = false; myCharId = null; takenChars.clear();
-      if (charGrid) charGrid.innerHTML = '';
-      enableReadyButton(false);
-      setReadyUI(false);
-      canRollNow = false; inTurnOrder = false; myHasRolled = false;
-      if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
-      if (triviaPadEl) triviaPadEl.style.display='none';
-      updateRollUI();
-    };
-  }
-
 
       // Hard offline / session cleared
       setStatus('Disconnected');
@@ -329,52 +337,6 @@
     };
   }
 
-  // ======== Session termination (host closed / kicked / expired) ========
-  const TERMINAL_CLOSE_CODES = new Set([
-    4000, // generic room closed
-    4001, // ROOM_CLOSED
-    4002, // GAME_ENDED
-    4003, // KICKED / BANNED
-    4401, // UNAUTHORIZED
-    4403, // FORBIDDEN
-    4410, // SESSION_EXPIRED
-    4411, // ROOM_NOT_FOUND
-  ]);
-  
-  let _terminal = false;
-  
-  function endSession(reason = 'Session closed') {
-    _terminal = true;
-    shouldReconnect = false;
-    reconnectAttempts = 0;
-  
-    // clear persisted session
-    try { clearSession(); } catch (_) {}
-  
-    // close socket quietly
-    try { ws && ws.close(); } catch (_) {}
-    ws = null;
-  
-    // reset UI to Join state
-    setStatus(reason);
-    setPhase('lobby');
-    setLobbyVisible(false);
-    joinCard?.classList.remove('hidden');
-  
-    myReady = false; myCharId = null; takenChars.clear();
-    if (charGrid) charGrid.innerHTML = '';
-    enableReadyButton(false);
-    setReadyUI(false);
-  
-    canRollNow = false; inTurnOrder = false; myHasRolled = false;
-    if (rollPanel) { rollPanel.classList.add('hidden'); rollPanel.style.display=''; }
-    if (triviaPadEl) triviaPadEl.style.display='none';
-    updateRollUI();
-  
-    showToast('🔒 ' + reason, 1800);
-  }
-
-  
   // ======== Message router ========
   function normType(t){
     if(!t) return t;
@@ -423,37 +385,24 @@
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'PONG') return;
-  
+
+      // unwrap STATE
       const isWrapped = (msg && msg.type === 'STATE' && msg.state);
       const inner = isWrapped ? msg.state : msg;
       const type = normType(inner.type || msg.type);
       const payload = inner;
       setDbg(type || 'unknown');
-  
-      // >>> NEW: handle terminal server signals
+
+      // ===== NEW: terminal signals =====
       if (type === 'ROOM_CLOSED' || type === 'SESSION_END' || type === 'GAME_ENDED') {
         endSession(payload.reason || 'Host ended the session');
         return;
       }
       if (type === 'KICKED' || type === 'PLAYER_KICKED') {
-        // if payload targets me explicitly, or if broadcast
         const pid = (payload.playerId || payload.id || '').trim();
-        if (!pid || idsEqual(pid, playerId)) {
-          endSession('You were removed by the host');
-          return;
-        }
+        if (!pid || idsEqual(pid, playerId)) { endSession('You were removed by the host'); return; }
       }
-
-      if (msg.type === 'CHARACTER_CATALOG') {
-        renderCatalog(msg.entries || msg.list || msg.characters || []);
-        return;
-      }
-
-      const isWrapped = (msg && msg.type === 'STATE' && msg.state);
-      const inner = isWrapped ? msg.state : msg;
-      const type = normType(inner.type || msg.type);
-      const payload = inner;
-      setDbg(type || 'unknown');
+      // ===== END NEW =====
 
       if (type === 'TEXT' && payload.message) showToast(payload.message);
 
@@ -650,6 +599,15 @@
         if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
       }
     } catch(e) { console.error(e); }
+  }
+
+  function applyCharacterPicked(pid, cid){
+    if (!pid) return;
+    if (idsEqual(pid, playerId)) {
+      myCharId = cid || null;
+      markSelected(myCharId);
+      enableReadyButton(!!myCharId);
+    }
   }
 
   // ======== Trivia gating (controls only) ========
@@ -871,7 +829,7 @@
       cancelReconnect();
       setStatus('Reconnect canceled — use Join to re-enter');
     });
-  
+
     // Character grid
     charGrid?.addEventListener('click', (e) => {
       const btn = e.target.closest('.charBtn');
@@ -880,7 +838,7 @@
       if (!id) return;
       onCharClicked(id);
     }, { passive: true });
-  
+
     // Ready
     readyBtn?.addEventListener('click', () => {
       if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) {
@@ -892,33 +850,32 @@
       if (myReady) sendUnready();
       else sendReady();
     }, { passive: true });
-  
+
     readyPill?.addEventListener('click', () => {
       if (readyBtn.disabled || readyBtn.classList.contains('btn-disabled')) return;
       readyBtn.click();
     }, { passive: true });
-  
+
     nameInput?.addEventListener('input', () => {
       if (myReady) sendUnready('Name changed');
     }, { passive:true });
-  
+
     // Join (click)
     $('btnJoin')?.addEventListener('click', onJoinClicked, { passive:true });
-  
-    // >>> NEW: Join on Enter in the room field <<<
+
+    // Join on Enter in the room field
     const roomEl = $('room');
     if (roomEl) {
       roomEl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') onJoinClicked();
       });
     }
-    // >>> END NEW <<<
-  
+
     // Roll
     rollBtn?.addEventListener('click', ()=>{
       if (!ws) return;
       if (!allowRollButton()) { updateRollUI(); return; }
-  
+
       if (inTurnOrder && !myHasRolled) {
         wsSend({ type:'PLAYER_ROLL' });
         wsSend({ type:'ROLL', phase:'TURN_ORDER' });
@@ -942,18 +899,18 @@
   async function onJoinClicked() {
     cancelReconnect();
     shouldReconnect = false;
-  
+
     const roomEl = $('room');
     if (!roomEl) { showToast('Room input not found. Refresh the page.'); return; }
-  
+
     roomId = String(roomEl.value || '').trim().toUpperCase();
     const name = String(nameInput?.value || '').trim() || 'Player';
     if (!roomId) { showToast('Enter room code.'); return; }
-  
+
     const btn = $('btnJoin');
     if (btn) { btn.disabled = true; btn.classList.add('btn-disabled'); }
     setStatus('Joining…', true);
-  
+
     try {
       const resp = await fetch(`${HTTP_BASE}/rooms/${encodeURIComponent(roomId)}/join`, {
         method: 'POST',
@@ -985,20 +942,7 @@
     } finally {
       if (btn) { btn.disabled = false; btn.classList.remove('btn-disabled'); }
     }
-  } // <-- function ends here; nothing else in between
-  
-  function tryAutoResume(){
-    const sess = loadSession();
-    if (sess) {
-      roomId   = sess.roomId;
-      playerId = sess.playerId;
-      if (nameInput) nameInput.value = sess.name || 'Player';
-      setStatus('Reconnecting…', true);
-      shouldReconnect = true;
-      connectWs();
-    }
   }
-
 
   function tryAutoResume(){
     const sess = loadSession();
