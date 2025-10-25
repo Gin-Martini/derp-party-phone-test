@@ -1,4 +1,4 @@
-// app.js — DerpPhone v10.0.8 (rehydrate-on-connect, manual reset, terminal handling)
+// app.js — DerpPhone v10.0.9 (rehydrate-on-connect, manual reset, terminal handling, trivia reconnect fix)
 'use strict';
 
 (() => {
@@ -491,7 +491,7 @@
       if (type === 'YOUR_TURN') {
         setPhase('in_game');
         const pid   = (payload.playerId || payload.id || '').trim();
-        const pname = (payload.name || '').trim();   // FIX: remove stray "a" char
+        const pname = (payload.name || '').trim();
         const isPidMatch  = (pid && pid === playerId);
         const theNameValue = (nameInput?.value||'').trim();
         const isNameMatch = (pname && pname === theNameValue);
@@ -714,6 +714,7 @@
     return hintKeys.some((key) => Object.prototype.hasOwnProperty.call(payload, key) && payload[key] != null);
   }
 
+  // === FIXED: eligibility trusts allowed[] first to support reconnects with new raw ids ===
   function computeTriviaEligibility(payload){
     if (!payload || typeof payload !== 'object') { triviaMode = 'PENDING'; return false; }
     if (!hasTriviaHints(payload)) { triviaMode = 'PENDING'; return null; }
@@ -752,11 +753,16 @@
       payload.playerIds, payload.players,
     ];
     let allowedIds = allowedSources.flatMap(collectIds).filter(Boolean);
+
     const allowAllFlags = [payload.allowed, payload.allow, payload.participants];
     const explicitAllowAllFromFlags = allowAllFlags.some((v) => v === true || allowAllTokens.has(normalizeToken(v)));
+
     const normalizedAllowed = allowedIds.map(normalizeToken);
     const allowAllFromAllowed = normalizedAllowed.some((t)=>allowAllTokens.has(t));
-    if (allowAllFromAllowed) allowedIds = allowedIds.filter((_, i)=>!allowAllTokens.has(normalizedAllowed[i]));
+    if (allowAllFromAllowed) {
+      // Strip tokens but remember that it's effectively open
+      allowedIds = allowedIds.filter((_, i)=>!allowAllTokens.has(normalizedAllowed[i]));
+    }
     const explicitAllowAll = explicitAllowAllFromFlags || allowAllFromAllowed;
 
     const soloHints = [
@@ -787,20 +793,21 @@
 
     const myId = playerId || '';
     const isAllowed = (list) => list.some((id) => idsEqual(id, myId));
-    const soloTarget = soloHints.find(Boolean) || fallbackIds.find(Boolean) || (allowedIds.length === 1 ? allowedIds[0] : '');
 
+    if (resolvedMode === 'FFA') {
+      if (allowedIds.length > 0) return isAllowed(allowedIds) || explicitAllowAll;
+      return true; // default-open FFA
+    }
+
+    // SOLO: TRUST allow-list first (fixes reconnect where soloPlayerId is a seat id and myId is a new raw id)
     if (resolvedMode === 'SOLO') {
-      if (soloTarget && !idsEqual(soloTarget, myId)) return false;
-      if (allowedIds.length > 0) return isAllowed(allowedIds);
-      if (soloHints.length > 0) return isAllowed(soloHints);
+      if (allowedIds.length > 0) return isAllowed(allowedIds); // <-- critical: no early false
+      if (soloHints.length > 0)   return isAllowed(soloHints);
       if (fallbackIds.length > 0) return isAllowed(fallbackIds);
       return false;
     }
-    if (resolvedMode === 'FFA') {
-      if (allowedIds.length > 0) return isAllowed(allowedIds);
-      if (explicitAllowAll) return true;
-      return true;
-    }
+
+    // Unknown mode: use allowedIds if present, else explicitAllowAll
     if (allowedIds.length > 0) return isAllowed(allowedIds);
     if (explicitAllowAll) return true;
     return false;
