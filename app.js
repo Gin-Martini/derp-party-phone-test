@@ -1,4 +1,4 @@
-// app.js — DerpPhone v10.0.9 (rehydrate-on-connect, manual reset, terminal handling, trivia reconnect fix)
+// app.js — DerpPhone v10.1.0 (rehydrate-on-connect, manual reset, terminal handling, trivia reconnect fix, id/name fallback for roll)
 'use strict';
 
 (() => {
@@ -72,6 +72,14 @@
   function setReadyPill(on){ if(!readyPill) return; readyPill.textContent=on?'Ready':'Not Ready'; readyPill.classList.toggle('ok',on); readyPill.classList.toggle('no',!on); }
   function ensureGridVisible(){ if(charGrid) charGrid.style.display='grid'; }
   function idsEqual(a,b){ return String(a||'').trim() === String(b||'').trim(); }
+
+  // --- NEW: tolerant “is this me?” (id OR name) ---
+  function isMeFrom(pid, pname){
+    const myName = (nameInput?.value || '').trim();
+    const idMatch = !!pid && idsEqual(pid, playerId);
+    const nameMatch = !!pname && pname.trim() && idsEqual(pname, myName);
+    return idMatch || (!idMatch && nameMatch);
+  }
 
   function enableReadyButton(can){
     if (!readyBtn) return;
@@ -481,7 +489,7 @@
 
         canRollNow = false;
         rollState.textContent = 'Waiting…';
-        rollState.classList.remove('ok'); 
+        rollState.classList.remove('ok');
         rollState.classList.add('no');
         updateRollUI();
         return;
@@ -492,10 +500,7 @@
         setPhase('in_game');
         const pid   = (payload.playerId || payload.id || '').trim();
         const pname = (payload.name || '').trim();
-        const isPidMatch  = (pid && pid === playerId);
-        const theNameValue = (nameInput?.value||'').trim();
-        const isNameMatch = (pname && pname === theNameValue);
-        const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+        const isMe  = isMeFrom(pid, pname);
 
         if (!pid && !isMe) { setDbg('YOUR_TURN (no pid, no name match) ignored'); return; }
 
@@ -517,9 +522,7 @@
         setPhase('in_game');
         const pid   = (payload.playerId || payload.id || '').trim();
         const pname = (payload.name || '').trim();
-        const isPidMatch  = (pid && pid === playerId);
-        const isNameMatch = (pname && pname === (nameInput?.value||'').trim());
-        const isMe = isPidMatch || (!isPidMatch && isNameMatch);
+        const isMe  = isMeFrom(pid, pname);
 
         canRollNow = !!isMe;
         if (isMe) {
@@ -613,9 +616,12 @@
         if (stateType === 'TURN_STATE' || stateType === 'CURRENT_TURN') {
           if (phase === 'lobby') return;
           const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
-          if (!pid) return;
-          canRollNow = idsEqual(pid, playerId);
-          if (canRollNow) {
+          const pname =
+            s.currentPlayerName || (s.turn && s.turn.currentPlayerName) ||
+            playerNameById.get(pid) || s.name || '';
+          const isMe = isMeFrom(pid, pname);
+          canRollNow = !!isMe;
+          if (isMe) {
             showRollOverlay('Your Turn — Roll!');
             rollState.textContent = 'Waiting…';
             rollState.classList.remove('ok'); rollState.classList.add('no');
