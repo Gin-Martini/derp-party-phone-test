@@ -569,6 +569,13 @@
         return;
       }
 
+      if (type === 'TRIVIA_SWITCH') {
+      // Replace current prompt; keep eligibility and deadline from payload
+      showTriviaPadIfAllowed(payload);  // same as TRIVIA_START path
+      showToast('🔁 New question!');
+      return;
+      }
+
       // ---- STATE snapshots / legacy trivia paths ----
       if (msg.type === 'STATE') {
         const s = msg.state || {};
