@@ -2,8 +2,10 @@ import { state } from './state.js';
 import { initUi, setStatus, showToast, enableReadyButton, setReadyUI, setDbg } from './ui.js';
 import { saveSession, loadSession, clearSession } from './session.js';
 import { connectWs, scheduleReconnect, cancelReconnect, wsSend, endSession, resetToLobbyUi } from './ws.js';
-import { renderCatalog } from './features/catalog.js';
-import { updateRollUI, showRollOverlay } from './features/rollOverlay.js';
+import { renderCatalog } from './features/catalog.js?v=11.0.1';
+import { updateRollUI, showRollOverlay } from './features/rollOverlay.js?v=11.0.1';
+import { state } from './state.js?v=11.0.1';
+import { initUi, setStatus, showToast, enableReadyButton, setReadyUI, setDbg } from './ui.js?v=11.0.1';
 import { HTTP_BASE } from './config.js';
 
 // ==== Boot ====
