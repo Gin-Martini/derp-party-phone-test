@@ -29,7 +29,7 @@ input{width:100%}
 
 /* Character grid */
 #charGrid{
-  display: grid;              /* was: none (this hid the UI) */
+  display: grid;              /* was: display:none — this hid the UI */
   margin: 12px 0;
   gap: 22px 22px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
