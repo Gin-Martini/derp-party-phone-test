@@ -194,6 +194,13 @@ export function onSocketMessage(ev){
       showToast('🔁 New question!'); return;
     }
 
+    // Handle catalog messages whether or not they're wrapped in STATE
+    if (type === 'CHARACTER_CATALOG') {
+      const list = (payload.entries || payload.catalog || []);
+      renderCatalog(list);
+      return;
+    }
+
     // ---- STATE snapshots / legacy trivia paths ----
     if (msg.type === 'STATE') {
       const s = msg.state || {};
