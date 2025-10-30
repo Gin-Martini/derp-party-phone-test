@@ -34,9 +34,9 @@ export function renderCatalog(entries){
 
 export function markTaken(list){
   state.takenChars.clear();
-  (list||[]).forEach(id => state.takenChars.add(String(id)));
+  (list || []).forEach(id => state.takenChars.add(String(id)));
   const grid = state.els.charGrid; if (!grid) return;
-  [...grid.querySelectorAll('.charBtn')].forEach(b=>{
+  [...grid.querySelectorAll('.charBtn')].forEach(b => {
     const id = b.dataset.charId;
     const isTaken = state.takenChars.has(id);
     const isMine  = (id === state.myCharId);
@@ -47,7 +47,7 @@ export function markTaken(list){
 
 export function markSelected(id){
   const grid = state.els.charGrid; if (!grid) return;
-  [...grid.querySelectorAll('.charBtn')].forEach(b=>{
+  [...grid.querySelectorAll('.charBtn')].forEach(b => {
     b.classList.toggle('selected', b.dataset.charId === id);
   });
   setDbg('selected=' + id);
