@@ -1,5 +1,6 @@
-import { state } from './state.js';
-import { resolvePortraitSrc, setDbg } from './ui.js';
+import { state } from '../state.js?v=11.0.1';
+import { resolvePortraitSrc, setDbg } from '../ui.js?v=11.0.1';
+
 
 export function renderCatalog(entries){
   const grid = state.els.charGrid; if (!grid) return;
