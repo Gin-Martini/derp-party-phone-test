@@ -4,6 +4,7 @@ import { saveSession, loadSession, clearSession } from './session.js';
 import { connectWs, scheduleReconnect, cancelReconnect, wsSend, endSession, resetToLobbyUi } from './ws.js';
 import { renderCatalog } from './features/catalog.js';
 import { updateRollUI, showRollOverlay } from './features/rollOverlay.js';
+import { HTTP_BASE } from './config.js';
 
 // ==== Boot ====
 function bindUi() {
@@ -59,8 +60,8 @@ function bindUi() {
     if (state.myReady) sendUnready('Name changed');
   }, { passive:true });
 
-  // Join
-  document.getElementById('btnJoin')?.addEventListener('click', onJoinClicked, { passive:true });
+  // Join (REMOVE passive so click is not ignored)
+  document.getElementById('btnJoin')?.addEventListener('click', onJoinClicked);
   const roomEl = document.getElementById('room');
   if (roomEl) roomEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(); });
 
@@ -112,7 +113,7 @@ async function onJoinClicked(){
   setStatus('Joining…', true);
 
   try {
-    const resp = await fetch(`https://derpparty-relay.fly.dev/rooms/${encodeURIComponent(state.roomId)}/join`, {
+    const resp = await fetch(`${HTTP_BASE}/rooms/${encodeURIComponent(state.roomId)}/join`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name })
     });
     if (!resp.ok) {
