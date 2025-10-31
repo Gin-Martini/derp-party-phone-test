@@ -3,19 +3,101 @@ import { state } from './state.js?v=11.0.1';
 import { initUi, setStatus, showToast, enableReadyButton, setReadyUI, setDbg } from './ui.js?v=11.0.1';
 import { saveSession, loadSession, clearSession } from './session.js';
 import { connectWs, scheduleReconnect, cancelReconnect, wsSend, endSession, resetToLobbyUi } from './ws.js';
-import { setOnSocketMessage } from './ws.js';
-import { onSocketMessage } from './router.js?v=11.0.1';
 import { renderCatalog } from './features/catalog.js?v=11.0.1';
 import { updateRollUI, showRollOverlay } from './features/rollOverlay.js?v=11.0.1';
 import { HTTP_BASE } from './config.js';
+// NEW: wire router
+import { onSocketEvent } from './router.js?v=11.0.1';
 
-// === DOM wiring & UI helpers (unchanged parts trimmed for brevity) ===
-function initUi(){ /* ... keep your existing init code ... */ }
-function setReadyUI(isReady){ /* ... existing ... */ }
-function enableReadyButton(on){ /* ... existing ... */ }
-function setDbg(s){ const pill = document.querySelector('#dbgLast, .dbg-last, .pill-last'); if (pill) pill.textContent = `last: ${s}`; }
 
-// === JOIN / RESUME ===
+// ==== Boot ====
+function bindUi() {
+  // Cancel pending reconnect by tapping status pill
+  state.els.status?.addEventListener('click', () => {
+    if (!state.shouldReconnect || !state.reconnectTimer) return;
+    cancelReconnect();
+    setStatus('Reconnect canceled — use Join to re-enter');
+  });
+
+  // Hidden hard-reset: triple tap or long-press
+  let _tapCount = 0, _lastTap = 0, _pressTo;
+  state.els.status?.addEventListener('click', () => {
+    const now = Date.now();
+    _tapCount = (now - _lastTap < 350) ? _tapCount + 1 : 1;
+    _lastTap = now;
+    if (_tapCount >= 3) { hardReset('manual triple-tap'); _tapCount = 0; }
+  });
+  state.els.status?.addEventListener('touchstart', () => { _pressTo = setTimeout(() => hardReset('manual long-press'), 800); }, { passive:true });
+  state.els.status?.addEventListener('touchend', () => clearTimeout(_pressTo), { passive:true });
+
+  // Character grid click
+  state.els.charGrid?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.charBtn');
+    if (!btn || !state.els.charGrid.contains(btn)) return;
+    const id = btn.dataset.charId;
+    if (!id) return;
+    if (state.takenChars.has(id) && id !== state.myCharId){ showToast('That character is taken.'); return; }
+    if (state.myReady && id !== state.myCharId) { sendUnready('Changed character'); }
+    wsSend({ type:'CHARACTER_SELECT', charId:id });
+    state.myCharId = id;
+    enableReadyButton(true);
+  }, { passive: true });
+
+  // Ready toggle
+  state.els.readyBtn?.addEventListener('click', () => {
+    const b = state.els.readyBtn;
+    if (b.disabled || b.classList.contains('btn-disabled')) {
+      if (!state.myCharId) showToast('Pick a character first');
+      else showToast('Still waiting for lobby to open');
+      return;
+    }
+    if (!state.ws) return;
+    if (state.myReady) sendUnready(); else sendReady();
+  }, { passive: true });
+
+  state.els.readyPill?.addEventListener('click', () => {
+    const b = state.els.readyBtn; if (b.disabled || b.classList.contains('btn-disabled')) return; b.click();
+  }, { passive: true });
+
+  // Name change -> unready
+  state.els.nameInput?.addEventListener('input', () => {
+    if (state.myReady) sendUnready('Name changed');
+  }, { passive:true });
+
+  // JOIN — never passive; bind pointerup + click for mobile reliability
+  const joinBtn = document.getElementById('btnJoin');
+  const fireJoin = (e) => { e.preventDefault(); onJoinClicked(); };
+  if (joinBtn) {
+    joinBtn.addEventListener('pointerup', fireJoin, { passive:false });
+    joinBtn.addEventListener('click',     fireJoin, { passive:false });
+  }
+  const roomEl = document.getElementById('room');
+  if (roomEl) roomEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(); });
+
+  // Roll button
+  state.els.rollBtn?.addEventListener('click', ()=>{
+    if (!state.ws) return;
+    if (state.phase === 'lobby') return;
+    if (state.inTurnOrder && !state.myHasRolled) {
+      wsSend({ type:'PLAYER_ROLL' });
+      wsSend({ type:'ROLL', phase:'TURN_ORDER' });
+      state.myHasRolled = true;
+      state.els.rollState.textContent = 'Rolling…';
+      updateRollUI();
+      setDbg('PLAYER_ROLL/ROLL (turn-order) sent');
+      return;
+    }
+    if (state.canRollNow) {
+      wsSend({ type:'ROLL_MOVE' });
+      wsSend({ type:'ROLL', phase:'MOVE' });
+      state.els.rollState.textContent = 'Rolling…';
+      state.canRollNow = false;
+      updateRollUI();
+      setDbg('ROLL_MOVE/ROLL (move) sent');
+    }
+  }, { passive:true });
+}
+
 async function onJoinClicked(){
   cancelReconnect(); state.shouldReconnect = false;
 
@@ -33,7 +115,7 @@ async function onJoinClicked(){
   try {
     const resp = await fetch(`${HTTP_BASE}/rooms/${encodeURIComponent(state.roomId)}/join`, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json' },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name })
     });
     if (!resp.ok) {
@@ -53,7 +135,7 @@ async function onJoinClicked(){
     }
     state.shouldReconnect = true;
     saveSession();
-    connectWs(); // HELLO on open; router is wired below
+    connectWs(); // HELLO on open
   } catch (e) {
     console.log('HTTP error:', e);
     setStatus('HTTP error'); showToast('Network error while joining.');
@@ -62,45 +144,38 @@ async function onJoinClicked(){
   }
 }
 
+function sendReady(){ wsSend({ type:'PLAYER_READY' }); setReadyUI(true); }
+function sendUnready(reason){ wsSend({ type:'PLAYER_UNREADY', reason }); setReadyUI(false); }
+
 function tryAutoResume(){
   const sess = loadSession();
-  if (!sess || !sess.roomId || !sess.playerId) return;
-  state.roomId = sess.roomId;
-  state.playerId = sess.playerId;
-  state.shouldReconnect = true;
-  setStatus('Reconnecting…', true);
-  connectWs();
+  if (sess) {
+    state.roomId   = sess.roomId;
+    state.playerId = sess.playerId;
+    if (state.els.nameInput) state.els.nameInput.value = sess.name || 'Player';
+    setStatus('Reconnecting…', true);
+    state.shouldReconnect = true;
+    connectWs();
+  }
 }
 
-// === boot ===
-function bindUi(){
-  const joinBtn = document.getElementById('btnJoin');
-  const fireJoin = (e) => { e.preventDefault(); onJoinClicked(); };
-  if (joinBtn) {
-    joinBtn.addEventListener('pointerup', fireJoin, { passive:false });
-    joinBtn.addEventListener('click',     fireJoin, { passive:false });
-  }
-  const roomEl = document.getElementById('room');
-  if (roomEl) roomEl.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(); });
-}
-function hardReset(why){
-  cancelReconnect(); state.shouldReconnect = false;
-  endSession(why || 'Reset');
+function hardReset(reason='Manual reset'){
+  endSession(reason);
   clearSession();
   resetToLobbyUi();
 }
+window.dpReset = hardReset;
+window.dpRehydrate = ()=>{ /* host will respond to snapshot requests via router schedule */ };
 
 function boot(){
   initUi();
   bindUi();
-  // Wire WS -> router so lobby/catalog render
-  try { setOnSocketMessage(onSocketMessage); } catch (e) { console.log('router wire error', e); }
+  // NEW: register router so incoming WS messages update UI
+  onSocketEvent();
+
   // URL kill-switch: ?reset / #reset / ?wipe / ?clear
   if (/(^|[?#&])(reset|wipe|clear)(=1)?/i.test(location.search + location.hash)) { hardReset('URL reset'); return; }
   tryAutoResume();
 }
-document.addEventListener('DOMContentLoaded', boot);
 
-// Expose a couple helpers for console debugging
-window.dpReset = hardReset;
-window.dpRehydrate = ()=>{ /* host will respond to snapshot requests */ };
+document.addEventListener('DOMContentLoaded', boot);
