@@ -80,6 +80,15 @@ function scheduleRehydrate(ms=900){
 
 // connect
 export function connectWs(){
+  const room = String(state.roomId || '').trim();
+  const player = String(state.playerId || '').trim();
+  if (!room || !player) {
+    // Nothing to connect yet — most likely a fresh load that hasn't joined.
+    try { setStatus('Waiting to join…'); } catch {}
+    state.shouldReconnect = false;
+    return;
+  }
+
   try { if (state.ws) { try { state.ws.close(); } catch {} } } catch {}
   const sock = new WebSocket(buildWsUrl());
   state.ws = sock;
