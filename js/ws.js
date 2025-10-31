@@ -1,103 +1,123 @@
-// js/main.js — FULL FILE (fix: set state before WS.connectWs; wire UI; safe auto-resume)
-import * as WS from './ws.js';
-import { HTTP_BASE } from './config.js';
-import { state } from './state.js?v=11.0.1';         // use same instance as ws.js
-import { initUi } from './ui.js?v=11.0.1';
+// js/ws.js — phone WS layer (fixed handshake)
+import { state } from './state.js';
+import { setPhase, setStatus, setLobbyVisible, showToast } from './ui.js';
+import { saveSession, clearSession } from './session.js';
 
-// minimal status helpers (work even if ui.js isn't fully wired yet)
-const $ = (s)=>document.querySelector(s);
-function setStatus(s, busy=false){
-  const el = $('#status'); if (el) el.textContent = `Status: ${s}`;
-  el?.classList?.toggle('busy', !!busy);
+// message router hook (set by router.js)
+let _onSocketMessage = () => {};
+export function setOnSocketMessage(fn){ _onSocketMessage = fn || (()=>{}); }
+
+// config
+const WS_BASE = 'wss://derpparty-relay.fly.dev/socket';
+const MAX_RECONNECT_ATTEMPTS = 6;
+
+// helpers
+function buildWsUrl() {
+  const room = String(state.roomId || '').trim().toUpperCase();
+  const name = (state.els.nameInput?.value || 'Player').trim() || 'Player';
+  const qs = new URLSearchParams({
+    room,
+    role: 'player',                    // <- must be 'player'
+    playerId: String(state.playerId || '').trim(),  // <- required
+    name
+  });
+  return `${WS_BASE}?${qs}`;
 }
-function toast(msg){
-  const t = $('#toast'); if (!t) { alert(msg); return; }
-  t.textContent = msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1500);
+function backoff(i){ return Math.min(2000 + i*500, 6000); }
+
+export function wsSend(obj){
+  try { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(obj)); } catch(_){}
 }
 
-// --- JOIN FLOW ---
-async function onJoinClicked(e){
-  e?.preventDefault?.();
-  WS.cancelReconnect?.();
-
-  const room = String($('#room')?.value || '').trim().toUpperCase();
-  const name = String($('#name')?.value || '').trim() || 'Player';
-  if (!room){ toast('Enter room code.'); return; }
-
-  const btn = $('#btnJoin'); btn?.classList?.add('btn-disabled'); if (btn) btn.disabled = true;
-  setStatus('Joining…', true);
-
-  try {
-    const url = `${HTTP_BASE}/rooms/${encodeURIComponent(room)}/join`;
-    const resp = await fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name }) });
-    if (!resp.ok){
-      const txt = await resp.text().catch(()=>'<no body>');
-      console.log('Join HTTP failed:', resp.status, txt);
-      setStatus(`Join failed (${resp.status})`); toast('Could not join room. Check code/capacity.');
-      return;
-    }
-    const j = await resp.json().catch(()=>({}));
-    const playerId = j.playerId || j.id || '';
-    if (!playerId){ setStatus('Join failed (no playerId)'); toast('Bad server response.'); return; }
-
-    // set identity for WS layer BEFORE connecting
-    state.roomId = room;
-    state.playerId = playerId;
-    state.shouldReconnect = true;
-    state.reconnectAttempts = 0;
-
-    // persist light session for next load
-    try { localStorage.setItem('dp.session', JSON.stringify({ roomId: room, playerId, name })); } catch {}
-
-    setStatus('Joined. Connecting…', true);
-    WS.connectWs?.();  // triggers HELLO on open
-  } catch (err){
-    console.log('HTTP error:', err);
-    setStatus('HTTP error'); toast('Network error while joining.');
-  } finally {
-    btn?.classList?.remove('btn-disabled'); if (btn) btn.disabled = false;
+// reconnect control
+export function scheduleReconnect(reason){
+  if (!state.shouldReconnect || !state.roomId || !state.playerId) return;
+  if ((state.reconnectAttempts|0) >= MAX_RECONNECT_ATTEMPTS){
+    endSession('Rejoin required'); clearSession(); resetToLobbyUi();
+    setStatus('Please re-enter the room code.'); showToast('Connection expired. Rejoin the room.'); return;
   }
+  setStatus(`Reconnecting… (${reason || 'lost connection'})`, true);
+  if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+  const wait = backoff(state.reconnectAttempts++);
+  state.reconnectTimer = setTimeout(()=>{ state.reconnectTimer = 0; connectWs(); }, wait);
 }
-window._JOIN = onJoinClicked; // manual fallback
-
-// --- UI BINDINGS ---
-function bindJoin(){
-  const btn = $('#btnJoin'); if (!btn) return;
-  const fire = (e)=>onJoinClicked(e);
-  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
-  $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
-}
-
-// --- OPTIONAL router wiring (non-blocking) ---
-async function wireRouter(){
-  try {
-    const mod = await import('./router.js?v=11.0.1');
-    if (mod?.onSocketMessage && typeof WS.setOnSocketMessage === 'function') {
-      WS.setOnSocketMessage(mod.onSocketMessage);
-    }
-  } catch (e) { console.warn('router optional:', e?.message || e); }
+export function cancelReconnect(){
+  state.shouldReconnect = false; state.reconnectAttempts = 0;
+  if (state.reconnectTimer){ clearTimeout(state.reconnectTimer); state.reconnectTimer = 0; }
 }
 
-// --- AUTO-RESUME (now sets state before WS) ---
-function tryAutoResume(){
-  try {
-    const raw = localStorage.getItem('dp.session'); if (!raw) return;
-    const s = JSON.parse(raw); if (!s?.roomId || !s?.playerId) return;
-    $('#name') && ($('#name').value = s.name || 'Player');
-    state.roomId = s.roomId;
-    state.playerId = s.playerId;
-    state.shouldReconnect = true;
-    state.reconnectAttempts = 0;
-    setStatus('Reconnecting…', true);
-    WS.connectWs?.();
-  } catch {}
+// rehydrate helpers
+function requestRehydrate(){
+  wsSend({ type:'REQUEST_SNAPSHOT' });
+  wsSend({ type:'REQUEST_CATALOG' });
+  wsSend({ type:'LOBBY_SNAPSHOT' });
+}
+function scheduleRehydrate(ms=900){
+  if (state._rehydrateTimer) clearTimeout(state._rehydrateTimer);
+  state._rehydrateTimer = setTimeout(()=>{
+    const empty = !state.els.charGrid || state.els.charGrid.children.length === 0;
+    requestRehydrate();
+    if (empty) setTimeout(()=>{ if (!state.els.charGrid || state.els.charGrid.children.length === 0) requestRehydrate(); }, 1500);
+  }, ms);
 }
 
-// --- BOOT ---
-function boot(){
-  initUi();        // wire #charGrid, #status, etc., so lobby + catalog can render
-  bindJoin();
-  wireRouter();    // non-blocking
-  tryAutoResume(); // if a session exists
+// connect
+export function connectWs(){
+  try { if (state.ws) { try { state.ws.close(); } catch {} } } catch {}
+  const sock = new WebSocket(buildWsUrl());
+  state.ws = sock;
+
+  sock.onopen = () => {
+    try {
+      wsSend({
+        type: 'HELLO_PLAYER',          // <- must be HELLO_PLAYER
+        roomId: state.roomId,
+        playerId: state.playerId,
+        name: (state.els.nameInput?.value||'').trim() || 'Player'
+      });
+    } catch {}
+
+    setStatus('Connected.', true);
+    state.els.joinCard?.classList.add('hidden');
+    setLobbyVisible(true);
+    saveSession();
+
+    clearInterval(state.hbInterval);
+    state.hbInterval = setInterval(()=> wsSend({ type:'PING' }), 5000);
+
+    if (state._firstMsgWatch) clearTimeout(state._firstMsgWatch);
+    state._firstMsgWatch = setTimeout(()=>{
+      endSession('Session expired or room closed'); clearSession(); resetToLobbyUi();
+      setStatus('Room missing/expired. Re-enter code.'); showToast('Room not found or expired.');
+    }, 4000);
+
+    scheduleRehydrate(300);
+  };
+
+  sock.onmessage = (ev) => {
+    if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
+    let msg = null; try { msg = JSON.parse(ev.data); } catch { return; }
+    try { _onSocketMessage(msg); } catch(e) { console.error('router error', e); }
+  };
+
+  sock.onerror = () => { setStatus('Connection problem'); showToast('Connection problem.'); };
+
+  sock.onclose = () => { if (state.shouldReconnect) scheduleReconnect('socket closed'); };
 }
-document.addEventListener('DOMContentLoaded', boot);
+
+// teardown used by scheduleReconnect
+function endSession(reason='Disconnected'){
+  state.shouldReconnect = false;
+  if (state.hbInterval) { clearInterval(state.hbInterval); state.hbInterval = 0; }
+  if (state.reconnectTimer){ clearTimeout(state.reconnectTimer); state.reconnectTimer = 0; }
+  state.reconnectAttempts = 0;
+  try { wsSend({ type:'GOODBYE' }); } catch {}
+  try { state.ws && state.ws.close(); } catch {}
+  state.ws = null;
+
+  setStatus(reason); setPhase('lobby'); setLobbyVisible(false);
+  state.els.joinCard?.classList.remove('hidden');
+}
+
+// console helper
+if (typeof window !== 'undefined') window.dpRehydrate = () => requestRehydrate();
