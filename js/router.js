@@ -1,5 +1,5 @@
 // js/router.js — FULL FILE (drop-in)
-// Version tag kept for cache-bust parity with other modules.
+// Imports keep the same cache-bust version to match your other modules.
 import { state } from './state.js?v=11.0.1';
 import {
   setDbg, setStatus, setLobbyVisible, setPhase, showToast,
@@ -10,14 +10,16 @@ import { updateRollUI, showRollOverlay, hideRollOverlay } from './features/rollO
 import { showTriviaPadIfAllowed } from './features/triviaPad.js?v=11.0.1';
 import { wsSend } from './ws.js';
 
-// --- helpers ---
+// ---------- helpers ----------
 const normType = (() => {
   const map = new Map([
     // connection / hello
     ['HELLO', 'HELLO'], ['HELLO_OK', 'HELLO_OK'], ['WELCOME', 'HELLO_OK'],
-    // lobby open/closed/state
-    ['LOBBY_OPEN', 'LOBBY_OPEN'], ['LOBBY_CLOSED', 'LOBBY_CLOSED'],
-    ['STATE', 'STATE'], ['LOBBY_STATE', 'STATE'],
+
+    // state envelopes (host sends both)
+    ['STATE', 'STATE'], ['LOBBY_STATE', 'STATE'], ['BROADCAST_STATE', 'STATE'],
+    ['SNAPSHOT', 'STATE'],
+
     // character flows
     ['CHARACTER_CATALOG', 'CHARACTER_CATALOG'],
     ['CATALOG', 'CHARACTER_CATALOG'],
@@ -26,40 +28,33 @@ const normType = (() => {
     ['CHAR_LIST', 'CHARACTER_CATALOG'],
     ['CHARACTER_SELECT', 'CHARACTER_SELECT'],
     ['CHARACTER_TAKEN', 'CHARACTER_TAKEN'], ['SELECTED', 'CHARACTER_TAKEN'],
+
     // ready
     ['READY', 'READY'], ['UNREADY', 'UNREADY'],
-    // turn order / roll
+
+    // turn/roll
     ['TURN_ORDER_START', 'TURN_ORDER_START'],
     ['TURN_ORDER_RESULT', 'TURN_ORDER_RESULT'],
     ['ROLL', 'ROLL'], ['ROLL_RESULT', 'ROLL_RESULT'], ['PLAYER_ROLL', 'PLAYER_ROLL'],
+
     // trivia
-    ['TRIVIA_START', 'TRIVIA_START'], ['TRIVIA_SWITCH', 'TRIVIA_SWITCH'],
-    ['TRIVIA_END', 'TRIVIA_END'], ['TRIVIA_ALLOWED', 'TRIVIA_ALLOWED'],
-    ['TRIVIA_BLOCKED', 'TRIVIA_BLOCKED'],
-    // misc
-    ['TEXT', 'TEXT'], ['MESSAGE', 'TEXT']
+    ['TRIVIA_START', 'TRIVIA_START'], ['TRIVIA_END', 'TRIVIA_END'],
+
+    // fallthrough
+    [undefined, 'UNKNOWN'], [null, 'UNKNOWN'], ['', 'UNKNOWN']
   ]);
-  return t => {
-    const k = String(t || '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '');
-    return map.get(k) || k || 'TEXT';
-  };
+  return (t) => (t ? (map.get(String(t).toUpperCase()) || String(t).toUpperCase()) : 'UNKNOWN');
 })();
 
-const coalesce = (obj, ...keys) => {
-  if (!obj || typeof obj !== 'object') return undefined;
-  for (const k of keys) {
-    if (obj[k] !== undefined) return obj[k];
-  }
-  return undefined;
-};
+const looksLikeB64 = (s) => typeof s === 'string' && s.length > 100 && /^[A-Za-z0-9+/=]+$/.test(s);
+const toDataUrl = (u, d) => (u ? u : looksLikeB64(d) ? 'data:image/png;base64,' + d : '');
 
-const toIdList = v => {
-  if (v == null) return [];
-  if (Array.isArray(v)) return v.map(x => String(x));
+const toIdList = (v) => {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map(String);
   if (typeof v === 'object') {
-    // map: { id: true } or { id: 1 }
     const keys = Object.keys(v);
-    if (keys.length && typeof v[keys[0]] === 'boolean') {
+    if (keys.length && keys.every(k => typeof v[k] === 'boolean')) {
       return keys.filter(k => v[k]).map(String);
     }
     return keys.flatMap(k => toIdList(v[k]));
@@ -69,7 +64,7 @@ const toIdList = v => {
 
 function applyTaken(list) {
   const taken = (list || []).map(String);
-  markTaken(taken);                 // updates state.takenChars + disables buttons
+  markTaken(taken); // updates state.takenChars + disables buttons
 }
 
 function ensureLobbyShown() {
@@ -79,228 +74,181 @@ function ensureLobbyShown() {
   enableReadyButton(!!state.myCharId);
 }
 
-// --- main router ---
-export function onSocketMessage(ev) {
-  let data = ev?.data;
-  try {
-    if (typeof data === 'string' && data.trim().startsWith('{')) data = JSON.parse(data);
-  } catch (e) {
-    // leave as raw string
+function coalesce(obj, ...path) {
+  let cur = obj;
+  for (const p of path) {
+    if (!cur || typeof cur !== 'object') return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+// Depth-first search for an array of catalog entries in any envelope/patch shape
+function findCatalogEntries(payload) {
+  // common spots
+  if (Array.isArray(payload?.entries)) return payload.entries;
+  if (Array.isArray(payload?.catalog?.entries)) return payload.catalog.entries;
+  if (Array.isArray(payload?.lobby?.characterCatalog?.entries)) return payload.lobby.characterCatalog.entries;
+
+  // patches / partials
+  const packs = []
+    .concat(payload?.patch || [])
+    .concat(payload?.patches || [])
+    .concat(payload?.parts || [])
+    .concat(payload?.batches || []);
+  for (const p of packs) {
+    if (Array.isArray(p?.entries)) return p.entries;
+    if (Array.isArray(p?.value?.entries)) return p.value.entries;
   }
 
-  // normalize shape
-  const msg = (typeof data === 'object' && data) ? data : { type: 'TEXT', message: String(data ?? '') };
+  // fallback: recursive search for an array of objects that look like entries
+  let found = null;
+  (function dfs(x){
+    if (found || !x) return;
+    if (Array.isArray(x)) {
+      if (x.length && typeof x[0] === 'object' && (('id' in x[0]) || ('label' in x[0]) || ('portrait' in x[0]))) {
+        found = x; return;
+      }
+      for (const it of x) dfs(it);
+      return;
+    }
+    if (typeof x === 'object') {
+      for (const k in x) { if (Object.prototype.hasOwnProperty.call(x,k)) dfs(x[k]); if (found) return; }
+    }
+  })(payload);
+
+  return found || [];
+}
+
+function normalizeEntry(e) {
+  if (!e) return null;
+  const id = String(e.id ?? e.charId ?? e.key ?? '');
+  if (!id) return null;
+  const label = e.label ?? e.name ?? id;
+  const url = toDataUrl(e.portraitUrl || e.url, e.portrait || e.data);
+  return { id, label, url };
+}
+
+// ---------- main router ----------
+export function onSocketMessage(ev) {
+  // Accept either a MessageEvent or an already-parsed object/string
+  let data = (ev && typeof ev === 'object' && Object.prototype.hasOwnProperty.call(ev, 'data'))
+    ? ev.data
+    : ev;
+
+  // If string JSON, parse
+  if (typeof data === 'string') {
+    const s = data.trim();
+    if (s.startsWith('{') || s.startsWith('[')) {
+      try { data = JSON.parse(s); } catch { /* leave as string */ }
+    }
+  }
+
+  // Normalize shape -> { type, payload? }
+  const msg = (data && typeof data === 'object') ? data : { type: 'TEXT', message: String(data ?? '') };
   const rawType = msg.type || msg.kind || msg.event || (msg.payload && msg.payload.type);
   const type = normType(rawType);
   let payload = (msg.payload && typeof msg.payload === 'object') ? msg.payload : msg;
+
+  // Peel common wrapper fields up one layer
   if (payload && typeof payload === 'object') {
-    if (payload.state && typeof payload.state === 'object') {
-      // merge state-level fields up one layer
-      payload = { ...payload, ...payload.state };
-    } else if (payload.data && typeof payload.data === 'object') {
-      payload = { ...payload, ...payload.data };
-    }
+    if (payload.state && typeof payload.state === 'object') payload = { ...payload, ...payload.state };
+    else if (payload.data && typeof payload.data === 'object') payload = { ...payload, ...payload.data };
   }
 
   setDbg('msg=' + type);
 
-  // ---- switchboard ----
   switch (type) {
-
     case 'TEXT': {
-      const m = payload.message || payload.text || String(data ?? '');
+      const m = payload.message || payload.text || '';
       if (m) setStatus(m);
       return;
     }
 
-    // ===== HELLO / JOINED =====
     case 'HELLO_OK': {
-      const pid = payload.playerId || payload.pid || payload.player;
+      const pid = payload.playerId || payload.id;
       const rid = payload.roomId || payload.room;
       if (pid) state.playerId = String(pid);
       if (rid) state.roomId = String(rid);
-      setStatus('Joined room.');
-      return;
-    }
-
-    // ===== LOBBY / CATALOG =====
-    case 'CHARACTER_CATALOG': {
-      const entries = coalesce(payload, 'entries', 'list', 'characters', 'catalog', 'items') || [];
+      setStatus('Joined room. Waiting for host…');
       ensureLobbyShown();
-      renderCatalog(entries); // builds grid fresh
-      const taken = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
-      if (taken != null) applyTaken(toIdList(taken));
-      markSelected(state.myCharId);
-      setStatus('Pick a character, then tap “I’m Ready”.');
       return;
     }
 
-    case 'CHARACTER_TAKEN': {
-      const tidMany = coalesce(payload, 'taken', 'takenIds', 'ids');
-      const tidOne  = coalesce(payload, 'charId', 'characterId', 'id');
-      let next = new Set(state.takenChars);
-      if (tidMany != null) toIdList(tidMany).forEach(id => next.add(String(id)));
-      if (tidOne  != null) next.add(String(tidOne));
-      // don't mark my current selection as taken for me
-      next.delete(state.myCharId || '');
-      applyTaken([...next]);
+    case 'STATE':
+    case 'CHARACTER_CATALOG': {
+      // entries + taken come through in a few shapes; be permissive
+      ensureLobbyShown();
+
+      const entriesRaw = findCatalogEntries(payload);
+      if (entriesRaw && entriesRaw.length) {
+        const entries = entriesRaw.map(normalizeEntry).filter(Boolean);
+        if (entries.length) renderCatalog(entries);
+      }
+
+      const takenList =
+        toIdList(payload.takenCharIds) ||
+        toIdList(payload.taken) ||
+        toIdList(payload.selected) ||
+        toIdList(payload.picked);
+      if (takenList && takenList.length) applyTaken(takenList);
+
+      // Keep "ready" button state sane
+      enableReadyButton(!!state.myCharId);
       return;
     }
 
     case 'CHARACTER_SELECT': {
-      const pid = coalesce(payload, 'playerId', 'pid', 'player');
-      const pname = coalesce(payload, 'playerName', 'name');
-      const charId = coalesce(payload, 'charId', 'characterId', 'id', 'char');
-      if (charId != null && isMeFrom(pid, pname)) {
-        state.myCharId = String(charId);
-        markSelected(state.myCharId);
+      const cid = payload.charId || payload.characterId || payload.id;
+      const from = payload.playerId || payload.senderId;
+      if (!cid) return;
+      if (isMeFrom(from)) {
+        state.myCharId = String(cid);
+        markSelected(String(cid));
         enableReadyButton(true);
+      } else {
+        // someone else chose -> mark taken
+        markTaken([String(cid)]);
       }
       return;
     }
 
-    case 'STATE': {
-      // Taken chars
-      const taken = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
-      if (taken != null) applyTaken(toIdList(taken));
-
-      // My selection (several possible shapes)
-      const selPid  = coalesce(payload, 'playerId', 'pid', 'player');
-      const selName = coalesce(payload, 'playerName', 'name');
-      const selChar = coalesce(payload, 'charId', 'characterId', 'char', 'id');
-      if (selChar != null && isMeFrom(selPid, selName)) {
-        state.myCharId = String(selChar);
-        markSelected(state.myCharId);
-        enableReadyButton(true);
-      }
-
-      // Trivia gate (allow/block)
-      showTriviaPadIfAllowed(payload, { quiet: true });
-
-      // If a catalog is present in STATE, render it here.
-      const entries = coalesce(payload, 'entries', 'list', 'characters', 'catalog', 'items');
-      if (entries && Array.isArray(entries)) {
-        ensureLobbyShown();
-        renderCatalog(entries);
-        markSelected(state.myCharId);
-        setStatus('Pick a character, then tap “I’m Ready”.');
-      } else if (payload.entries || payload.characters || payload.catalog) {
-        // Catalog implied (maybe empty): still show lobby
-        ensureLobbyShown();
-      }
+    case 'CHARACTER_TAKEN': {
+      applyTaken(toIdList(payload.taken || payload.charId || payload.id));
       return;
     }
 
-    // ===== READY =====
     case 'READY': {
-      const pid = coalesce(payload, 'playerId', 'pid', 'player');
-      const pname = coalesce(payload, 'playerName', 'name');
-      if (isMeFrom(pid, pname)) setReadyUI(true);
+      if (isMeFrom(payload.playerId || payload.senderId)) setReadyUI(true);
       return;
     }
 
     case 'UNREADY': {
-      const pid = coalesce(payload, 'playerId', 'pid', 'player');
-      const pname = coalesce(payload, 'playerName', 'name');
-      if (isMeFrom(pid, pname)) setReadyUI(false);
+      if (isMeFrom(payload.playerId || payload.senderId)) setReadyUI(false);
       return;
     }
 
-    // ===== LOBBY OPEN/CLOSE =====
-    case 'LOBBY_OPEN': {
-      ensureLobbyShown();
-      setStatus('Lobby open.');
-      return;
-    }
-    case 'LOBBY_CLOSED': {
-      setPhase('closed');
-      setLobbyVisible(false);
-      setStatus('Lobby closed.');
-      return;
-    }
-
-    // ===== TURN ORDER / ROLL FLOW =====
-    case 'TURN_ORDER_START': {
-      setPhase('roll');
-      showRollOverlay();
-      updateRollUI({ phase: 'start', players: payload.players || [] });
-      return;
-    }
-
-    case 'PLAYER_ROLL': {
-      const who = coalesce(payload, 'playerId', 'pid', 'player');
-      const val = coalesce(payload, 'value', 'roll', 'result');
-      updateRollUI({ phase: 'rolling', who, val });
-      return;
-    }
-
-    case 'ROLL_RESULT':
+    // --- roll / turn-order (no-ops here but keep hooks) ---
+    case 'TURN_ORDER_START':
     case 'TURN_ORDER_RESULT':
-    case 'ROLL': {
-      const order = coalesce(payload, 'order', 'turnOrder', 'players') || [];
-      updateRollUI({ phase: 'result', order });
-      // lobby UI stays hidden during roll overlay
+    case 'ROLL':
+    case 'ROLL_RESULT':
+    case 'PLAYER_ROLL': {
+      updateRollUI(payload);
       return;
     }
 
-    // ===== TRIVIA =====
-    case 'TRIVIA_ALLOWED': {
-      state.triviaAllowed = true;
-      showTriviaPadIfAllowed(payload);
-      return;
-    }
-    case 'TRIVIA_BLOCKED': {
-      state.triviaAllowed = false;
-      showTriviaPadIfAllowed(payload); // closes if open
-      return;
-    }
-    case 'TRIVIA_START': {
-      state.triviaAllowed = true;
-      showTriviaPadIfAllowed(payload);
-      return;
-    }
-    case 'TRIVIA_SWITCH': {
-      showTriviaPadIfAllowed(payload);
-      return;
-    }
+    // --- trivia (gate opens on any-join elsewhere; show if allowed) ---
+    case 'TRIVIA_START':
     case 'TRIVIA_END': {
-      state.triviaAllowed = false;
-      showTriviaPadIfAllowed(payload);
+      showTriviaPadIfAllowed();
       return;
     }
 
     default: {
-      setDbg('unhandled=' + type);
+      // benign debug for unknowns
+      setDbg('unhandled:' + (rawType || type));
       return;
     }
   }
-}
-
-// --- outbound helpers (UI -> host) ---
-export function sendReady(flag) {
-  wsSend({ type: flag ? 'READY' : 'UNREADY' });
-}
-
-export function requestCatalog() {
-  wsSend({ type: 'CATALOG' });
-}
-
-export function selectCharacter(charId) {
-  if (!charId) return;
-  wsSend({ type: 'CHARACTER_SELECT', charId: String(charId) });
-}
-
-export function requestRehydrate() {
-  wsSend({ type: 'STATE' });
-}
-
-// --- roll overlay interop (optional) ---
-export function notifyRollUIVisible(v) {
-  if (v != null && state.els.rollPanel) {
-    state.els.rollPanel.style.display = v ? '' : 'none';
-  }
-}
-
-export function setRollValueText(v) {
-  if (v != null && state.els.rollValue) state.els.rollValue.textContent = String(v);
 }
