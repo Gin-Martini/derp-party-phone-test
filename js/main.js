@@ -2,7 +2,7 @@
 import * as WS from './ws.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { state } from './state.js?v=11.0.12';
-import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.12';
+import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase, setReadyUI } from './ui.js?v=11.0.12';
 import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.12';
 import { onSocketMessage } from './router.js?v=11.0.12';
 
@@ -123,6 +123,38 @@ function bindJoin(){
   const fire = (e)=>onJoinClicked(e);
   ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
   $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
+}
+
+function sendReadyState(ready){
+  const readyFlag = !!ready;
+  const base = {
+    roomId: state.roomId || undefined,
+    playerId: state.playerId || undefined,
+    ready: readyFlag,
+    isReady: readyFlag,
+    value: readyFlag,
+    status: readyFlag ? 'READY' : 'NOT_READY'
+  };
+
+  try { WS.wsSend({ type: 'INTENT', intent: readyFlag ? 'READY' : 'UNREADY', ...base }); } catch {}
+  try { WS.wsSend({ type: 'READY', ...base }); } catch {}
+  try { WS.wsSend({ type: readyFlag ? 'PLAYER_READY' : 'PLAYER_UNREADY', ...base }); } catch {}
+  try { WS.wsSend({ type: 'SET_READY', ...base }); } catch {}
+}
+
+function onReadyClicked(e){
+  e?.preventDefault?.();
+  const btn = $('#btnReady');
+  if (btn?.disabled) return;
+  const next = !state.myReady;
+  setReadyUI(next);
+  sendReadyState(next);
+}
+
+function bindReady(){
+  const btn = $('#btnReady'); if (!btn) return;
+  const fire = (e)=>onReadyClicked(e);
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
 }
 
 function onResetClicked(e){
@@ -264,6 +296,7 @@ function boot(){
   const initialCatalog = Array.isArray(state._pendingCatalog) ? state._pendingCatalog : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
   renderCatalog(initialCatalog);
   bindJoin();
+  bindReady();
   bindResume();
   bindSessionControls();
   const didReset = maybeResetFromQuery();
