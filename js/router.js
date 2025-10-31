@@ -1,8 +1,8 @@
 // js/router.js — FULL FILE (patch-aware, blob-safe)
-import { state } from './state.js?v=11.0.6';
-import { renderCatalog } from './features/catalog.js?v=11.0.6';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.6';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.6';
+import { state } from './state.js?v=11.0.9';
+import { renderCatalog } from './features/catalog.js?v=11.0.9';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.9';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.9';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -177,6 +177,9 @@ export async function onSocketMessage(msg){
     console.log('router error:', err);
   }
 }
+
+// Ensure the shared ws layer forwards messages here immediately on module load and for legacy entry points.
+setOnSocketMessage(onSocketMessage);
 
 // Optional: if your ws layer wires events instead of raw strings
 export function onSocketEvent(ev) { return setOnSocketMessage(onSocketMessage); }
