@@ -5,7 +5,7 @@ import { saveSession, clearSession } from './session.js';
 
 // ----- message router hook (set by router.js) -----
 let _onSocketMessage = () => {};
-export function setOnSocketMessage(fn) { _onSocketMessage = fn || (()=>{}); }
+export function setOnSocketMessage(fn){ _onSocketMessage = fn || (()=>{}); }
 
 // ----- config -----
 const WS_BASE = 'wss://derpparty-relay.fly.dev/socket';
