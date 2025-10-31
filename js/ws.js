@@ -1,17 +1,32 @@
-// js/ws.js — FULL FILE (watchdog + capped reconnects)
+// js/ws.js — phone WS layer (cycle-free)
 import { state } from './state.js';
-import { WS_URL, backoff } from './config.js';
-import { setPhase, setStatus, setLobbyVisible, setDbg, showToast } from './ui.js';
+import { setPhase, setStatus, setLobbyVisible, showToast } from './ui.js';
 import { saveSession, clearSession } from './session.js';
-import { onSocketMessage as _onSocketMessage } from './router.js';
 
+// ----- message router hook (set by router.js) -----
+let _onSocketMessage = () => {};
+export function setOnSocketMessage(fn) { _onSocketMessage = fn || (()=>{}); }
+
+// ----- config -----
+const WS_BASE = 'wss://derpparty-relay.fly.dev/socket';
 const MAX_RECONNECT_ATTEMPTS = 6;
 
-// ---- reconnect control ----
+// ----- helpers -----
+function buildWsUrl() {
+  const room = String(state.roomId || '').trim().toUpperCase();
+  const name = (state.els.nameInput?.value || 'Player').trim() || 'Player';
+  const qs = new URLSearchParams({ room, role: 'phone', name });
+  return `${WS_BASE}?${qs}`;
+}
+function backoff(i){ return Math.min(2000 + i*500, 6000); } // simple/local backoff
+
+export function wsSend(obj){
+  try { state.ws && state.ws.readyState === 1 && state.ws.send(JSON.stringify(obj)); } catch(_){}
+}
+
+// ----- reconnect control -----
 export function scheduleReconnect(reason){
   if (!state.shouldReconnect || !state.roomId || !state.playerId) return;
-
-  // cap retries -> force clean rejoin to avoid "phantom room" state
   if ((state.reconnectAttempts|0) >= MAX_RECONNECT_ATTEMPTS) {
     endSession('Rejoin required');
     clearSession();
@@ -20,31 +35,29 @@ export function scheduleReconnect(reason){
     showToast('Connection expired. Rejoin the room.');
     return;
   }
-
   setStatus(`Reconnecting… (${reason || 'lost connection'})`, true);
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   const wait = backoff(state.reconnectAttempts++);
   state.reconnectTimer = setTimeout(()=>{ state.reconnectTimer = 0; connectWs(); }, wait);
 }
-
 export function cancelReconnect(){
   state.shouldReconnect = false;
   state.reconnectAttempts = 0;
   if (state.reconnectTimer){ clearTimeout(state.reconnectTimer); state.reconnectTimer = 0; }
 }
 
+// ----- connect -----
 export function connectWs(){
   try {
-    state.ws = new WebSocket(WS_URL);
+    state.ws = new WebSocket(buildWsUrl());
     attachWsHandlers(state.ws);
   } catch {
     scheduleReconnect('ws construct failed');
   }
 }
 
-// ---- initial rehydrate helpers ----
+// ----- initial rehydrate helpers -----
 function requestRehydrate(tag){
-  setDbg('rehydrate:' + (tag||''));
   wsSend({ type:'REQUEST_SNAPSHOT' });
   wsSend({ type:'REQUEST_CATALOG' });
   wsSend({ type:'LOBBY_SNAPSHOT' });
@@ -60,11 +73,7 @@ function scheduleRehydrate(ms=900){
   }, ms);
 }
 
-export function wsSend(obj){
-  try { state.ws && state.ws.readyState === 1 && state.ws.send(JSON.stringify(obj)); } catch(_){}
-}
-
-// ---- handlers ----
+// ----- handlers -----
 function attachWsHandlers(sock){
   sock.onopen = () => {
     try {
@@ -79,16 +88,13 @@ function attachWsHandlers(sock){
     setStatus('Connected.', true);
     state.els.joinCard?.classList.add('hidden');
     setLobbyVisible(true);
-
     saveSession();
 
     clearInterval(state.hbInterval);
     state.hbInterval = setInterval(()=> wsSend({ type:'PING' }), 5000);
 
-    // Start watchdog: if no first message lands quickly, assume dead session/room
     if (state._firstMsgWatch) clearTimeout(state._firstMsgWatch);
     state._firstMsgWatch = setTimeout(()=>{
-      // If still no message, tear down and force a clean rejoin
       endSession('Session expired or room closed');
       clearSession();
       resetToLobbyUi();
@@ -100,24 +106,18 @@ function attachWsHandlers(sock){
   };
 
   sock.onmessage = (ev) => {
-    // First actual message clears the watchdog
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
-
-    let msg = null;
-    try { msg = JSON.parse(ev.data); } catch { return; }
-    _onSocketMessage(msg);
+    let msg = null; try { msg = JSON.parse(ev.data); } catch { return; }
+    try { _onSocketMessage(msg); } catch(e) { console.error('router error', e); }
   };
 
-  sock.onerror = () => {
-    setStatus('Socket error'); // visible until close fires
-  };
+  sock.onerror = () => { setStatus('Socket error'); };
 
   sock.onclose = (e) => {
     try { clearInterval(state.hbInterval); } catch {}
     clearInterval(state.hbInterval);
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
     state.triviaAllowed = null; state.triviaMode = 'PENDING';
-
     if (state._terminal) return;
 
     const code = Number(e.code || 0);
@@ -130,17 +130,10 @@ function attachWsHandlers(sock){
       reason.includes('FORBIDDEN') ||
       reason.includes('UNAUTHORIZED');
 
-    if (looksTerminal) {
-      endSession(reason || `Closed (${code})`);
-      return;
-    }
+    if (looksTerminal) { endSession(reason || `Closed (${code})`); return; }
 
     setStatus(`Disconnected (${code || '—'})`, true);
-    if (state.shouldReconnect) {
-      scheduleReconnect(`close ${code}`);
-    } else {
-      resetToLobbyUi();
-    }
+    if (state.shouldReconnect) scheduleReconnect(`close ${code}`); else resetToLobbyUi();
   };
 }
 
@@ -170,7 +163,5 @@ export function endSession(reason='Session ended'){
   state.els.joinCard?.classList.remove('hidden');
 }
 
-// expose manual rehydrate for console debugging
-if (typeof window !== 'undefined') {
-  window.dpRehydrate = () => requestRehydrate('manual');
-}
+// console helper
+if (typeof window !== 'undefined') window.dpRehydrate = () => requestRehydrate('manual');
