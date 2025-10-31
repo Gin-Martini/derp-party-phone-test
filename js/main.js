@@ -1,8 +1,9 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
-import * as WS from './ws.js?v=11.0.7';
-import { state } from './state.js?v=11.0.7';
-import { initUi, hideJoinCard, resetToLobbyUi } from './ui.js?v=11.0.7';
-import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.7';
+import * as WS from './ws.js?v=11.0.8';
+import { state } from './state.js?v=11.0.8';
+import { initUi, hideJoinCard, resetToLobbyUi } from './ui.js?v=11.0.8';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.8';
+import { onSocketMessage } from './router.js?v=11.0.8';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -18,6 +19,9 @@ function toast(msg){
 }
 
 let storedSession = null;
+
+// Wire the router immediately so the very first WS messages (HELLO/CATALOG) are handled.
+WS.setOnSocketMessage(onSocketMessage);
 
 function updateJoinButtonLabel(hasStored){
   const btn = $('#btnJoin'); if (!btn) return;
@@ -176,16 +180,6 @@ function bindResume(){
   ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
 }
 
-// --- Optional router wiring (cache-busted import) ---
-async function wireRouter(){
-  try {
-    const mod = await import('./router.js?v=11.0.7');
-    if (mod?.onSocketMessage && typeof WS.setOnSocketMessage === 'function') {
-      WS.setOnSocketMessage(mod.onSocketMessage);
-    }
-  } catch (e) { console.warn('router optional:', e?.message || e); }
-}
-
 // --- AUTO-RESUME (supports old and new keys) ---
 function loadStoredSession(){
   try {
@@ -262,7 +256,6 @@ function boot(){
   bindJoin();
   bindResume();
   bindSessionControls();
-  wireRouter();   // non-blocking
   const didReset = maybeResetFromQuery();
   if (!didReset) tryAutoResume();
   else updateJoinButtonLabel(false);

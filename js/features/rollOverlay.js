@@ -1,4 +1,4 @@
-import { state } from '../state.js?v=11.0.7';
+import { state } from '../state.js?v=11.0.8';
 
 export function allowRollButton(){
   if (state.phase === 'lobby') return false;
