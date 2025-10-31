@@ -20,6 +20,10 @@ const normType = (() => {
     ['STATE', 'STATE'], ['LOBBY_STATE', 'STATE'],
     // character flows
     ['CHARACTER_CATALOG', 'CHARACTER_CATALOG'],
+    ['CATALOG', 'CHARACTER_CATALOG'],
+    ['CHARACTERS', 'CHARACTER_CATALOG'],
+    ['CHARACTER_LIST', 'CHARACTER_CATALOG'],
+    ['CHAR_LIST', 'CHARACTER_CATALOG'],
     ['CHARACTER_SELECT', 'CHARACTER_SELECT'],
     ['CHARACTER_TAKEN', 'CHARACTER_TAKEN'], ['SELECTED', 'CHARACTER_TAKEN'],
     // ready
@@ -52,7 +56,6 @@ const toIdList = (v) => {
   if (v == null) return [];
   if (Array.isArray(v)) return v.flatMap(toIdList).map(x => String(x)).filter(Boolean);
   if (typeof v === 'object') {
-    // object map -> true flags or nested values
     const keys = Object.keys(v);
     if (keys.length && keys.every(k => typeof v[k] === 'boolean')) {
       return keys.filter(k => v[k]).map(String);
@@ -101,7 +104,6 @@ export function onSocketMessage(ev) {
     }
 
     case 'HELLO_OK': {
-      // May include ids; tolerate absence
       const pid = payload.playerId || payload.id;
       const rid = payload.roomId || payload.room;
       if (pid) state.playerId = String(pid);
@@ -112,13 +114,11 @@ export function onSocketMessage(ev) {
 
     // ===== LOBBY / CATALOG =====
     case 'CHARACTER_CATALOG': {
-      const entries = coalesce(payload, 'entries', 'list', 'characters') || [];
+      const entries = coalesce(payload, 'entries', 'list', 'characters', 'catalog', 'items') || [];
       ensureLobbyShown();
       renderCatalog(entries); // builds grid fresh
-      // If server also sends taken immediately with catalog, apply it
       const taken = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
       if (taken != null) applyTaken(toIdList(taken));
-      // keep selection visible
       markSelected(state.myCharId);
       setStatus('Pick a character, then tap “I’m Ready”.');
       return;
@@ -138,13 +138,12 @@ export function onSocketMessage(ev) {
     }
 
     case 'STATE': {
-      // Generic state snapshot (lobby/roll/trivia hints may be present)
       // Taken chars
       const taken = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
       if (taken != null) applyTaken(toIdList(taken));
 
       // My selection (several possible shapes)
-      const selPid = coalesce(payload, 'playerId', 'pid', 'player');
+      const selPid  = coalesce(payload, 'playerId', 'pid', 'player');
       const selName = coalesce(payload, 'playerName', 'name');
       const selChar = coalesce(payload, 'charId', 'characterId', 'char', 'id');
       if (selChar != null && isMeFrom(selPid, selName)) {
@@ -159,20 +158,28 @@ export function onSocketMessage(ev) {
         const mine = !!readyMap[state.playerId] || !!readyMap[String(state.playerId)];
         setReadyUI(!!mine);
       }
-      if (payload.ready === true && isMeFrom(selPid, selName)) setReadyUI(true);
+      if (payload.ready === true  && isMeFrom(selPid, selName)) setReadyUI(true);
       if (payload.ready === false && isMeFrom(selPid, selName)) setReadyUI(false);
 
       // Trivia pad gating (quiet refresh)
       showTriviaPadIfAllowed(payload, { quiet: true });
 
-      // Show lobby if a catalog is implied
-      if (payload.entries || payload.characters || payload.catalog) ensureLobbyShown();
+      // If a catalog is present in STATE, render it here.
+      const entries = coalesce(payload, 'entries', 'list', 'characters', 'catalog', 'items');
+      if (entries && Array.isArray(entries)) {
+        ensureLobbyShown();
+        renderCatalog(entries);
+        markSelected(state.myCharId);
+        setStatus('Pick a character, then tap “I’m Ready”.');
+      } else if (payload.entries || payload.characters || payload.catalog) {
+        // Catalog implied (maybe empty): still show lobby
+        ensureLobbyShown();
+      }
       return;
     }
 
     // ===== CHARACTER EVENTS =====
     case 'CHARACTER_SELECT': {
-      // Echo from server when anyone selects; if it's me, lock UI affordances
       const pid = coalesce(payload, 'playerId', 'pid', 'player');
       const pname = coalesce(payload, 'playerName', 'name');
       const cid = coalesce(payload, 'charId', 'characterId', 'char', 'id');
@@ -186,13 +193,11 @@ export function onSocketMessage(ev) {
     }
 
     case 'CHARACTER_TAKEN': {
-      // Update visual taken list; tolerate various shapes
-      const tidOne = coalesce(payload, 'charId', 'characterId', 'id');
+      const tidOne  = coalesce(payload, 'charId', 'characterId', 'id');
       const tidMany = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
       let next = new Set(state.takenChars);
       if (tidMany != null) toIdList(tidMany).forEach(id => next.add(String(id)));
-      if (tidOne != null) next.add(String(tidOne));
-      // Never block *my* currently selected id
+      if (tidOne  != null) next.add(String(tidOne));
       next.delete(state.myCharId || '');
       applyTaken([...next]);
       return;
@@ -224,12 +229,10 @@ export function onSocketMessage(ev) {
     }
 
     case 'PLAYER_ROLL': {
-      // another player's roll event; UI reacts when result arrives
       return;
     }
 
     case 'ROLL_RESULT': {
-      // server might send { playerId, value } or a summary
       const v = coalesce(payload, 'value', 'v', 'roll', 'result');
       if (v != null && state.els.rollValue) state.els.rollValue.textContent = String(v);
       const done = !!payload.done;
@@ -242,7 +245,6 @@ export function onSocketMessage(ev) {
     }
 
     case 'TURN_ORDER_RESULT': {
-      // final order text, hide roll affordance, show summary
       state.inTurnOrder = false;
       state.myHasRolled = true;
       if (state.els.orderResult) {
@@ -264,7 +266,6 @@ export function onSocketMessage(ev) {
     }
 
     default: {
-      // Unknown: light surface feedback, but don't error
       setDbg('unhandled=' + type);
       return;
     }
