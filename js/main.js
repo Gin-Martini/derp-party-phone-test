@@ -1,9 +1,10 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
-import * as WS from './ws.js?v=11.0.8';
-import { state } from './state.js?v=11.0.8';
-import { initUi, hideJoinCard, resetToLobbyUi } from './ui.js?v=11.0.8';
-import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.8';
-import { onSocketMessage } from './router.js?v=11.0.8';
+import * as WS from './ws.js?v=11.0.9';
+import { renderCatalog } from './features/catalog.js?v=11.0.9';
+import { state } from './state.js?v=11.0.9';
+import { initUi, hideJoinCard, resetToLobbyUi } from './ui.js?v=11.0.9';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.9';
+import { onSocketMessage } from './router.js?v=11.0.9';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -253,6 +254,8 @@ function tryAutoResume(){
 // --- BOOT ---
 function boot(){
   initUi();       // wire DOM refs so router/catalog can render the grid
+  const initialCatalog = Array.isArray(state._pendingCatalog) ? state._pendingCatalog : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
+  renderCatalog(initialCatalog);
   bindJoin();
   bindResume();
   bindSessionControls();

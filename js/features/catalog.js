@@ -1,15 +1,22 @@
 // js/features/catalog.js — FULL FILE (adds empty-state hint)
-import { state } from '../state.js?v=11.0.8';
-import { setDbg, resolvePortraitSrc } from '../ui.js?v=11.0.8';
+import { state } from '../state.js?v=11.0.9';
+import { setDbg, resolvePortraitSrc } from '../ui.js?v=11.0.9';
 
 export function renderCatalog(entries) {
+  const list = Array.isArray(entries) ? entries.slice() : [];
+
+  if (!state.catalog) state.catalog = { entries: [] };
+  state.catalog.entries = list;
+  state._pendingCatalog = list;
+
   const grid = state.els.charGrid;
   if (!grid) return;
 
+  // Once the grid is available we can flush any pending catalog into it.
+  state._pendingCatalog = null;
+
   // Clear and (re)fill
   grid.replaceChildren();
-
-  const list = entries || [];
   if (list.length === 0) {
     const hint = document.createElement('div');
     hint.className = 'emptyHint';
