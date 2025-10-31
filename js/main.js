@@ -1,7 +1,7 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
 import * as WS from './ws.js?v=11.0.5';
 import { state } from './state.js?v=11.0.5';
-import { initUi, hideJoinCard, setLobbyVisible } from './ui.js?v=11.0.5';
+import { initUi, hideJoinCard } from './ui.js?v=11.0.5';
 import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.5';
 
 // Minimal status helpers (works even if ui wiring hiccups)
@@ -58,7 +58,6 @@ async function onJoinClicked(e){
 
     setStatus('Joined. Connecting…', true);
     hideJoinCard();
-    setLobbyVisible(true);
     WS.connectWs?.(); // triggers HELLO on open using state.roomId/playerId
   } catch (err){
     console.log('HTTP error:', err);
