@@ -109,10 +109,37 @@ export function connectWs(){
     scheduleRehydrate(300);
   };
 
-  sock.onmessage = (ev) => {
+  sock.onmessage = async (ev) => {
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
-    let msg = null; try { msg = JSON.parse(ev.data); } catch { return; }
-    try { _onSocketMessage(msg); } catch(e) { console.error('router error', e); }
+
+    let payload = ev?.data;
+
+    try {
+      if (payload instanceof Blob) {
+        payload = await payload.text();
+      } else if (payload instanceof ArrayBuffer) {
+        payload = new TextDecoder().decode(payload);
+      }
+
+      if (typeof payload === 'string') {
+        const trimmed = payload.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          try {
+            payload = JSON.parse(trimmed);
+          } catch {
+            payload = trimmed; // fall through to string handling downstream
+          }
+        } else {
+          payload = trimmed;
+        }
+      }
+    } catch (err) {
+      console.warn('ws message decode failed', err);
+      payload = ev?.data ?? null;
+    }
+
+    try { _onSocketMessage(payload); }
+    catch(e) { console.error('router error', e); }
   };
 
   sock.onerror = () => { setStatus('Connection problem'); showToast('Connection problem.'); };
