@@ -1,8 +1,8 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
-import * as WS from './ws.js?v=11.0.5';
-import { state } from './state.js?v=11.0.5';
-import { initUi, hideJoinCard } from './ui.js?v=11.0.5';
-import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.5';
+import * as WS from './ws.js?v=11.0.6';
+import { state } from './state.js?v=11.0.6';
+import { initUi, hideJoinCard } from './ui.js?v=11.0.6';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.6';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -79,7 +79,7 @@ function bindJoin(){
 // --- Optional router wiring (cache-busted import) ---
 async function wireRouter(){
   try {
-    const mod = await import('./router.js?v=11.0.5');
+    const mod = await import('./router.js?v=11.0.6');
     if (mod?.onSocketMessage && typeof WS.setOnSocketMessage === 'function') {
       WS.setOnSocketMessage(mod.onSocketMessage);
     }
@@ -93,6 +93,47 @@ function loadStoredSession(){
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
 }
+
+function shouldResetFromQuery(){
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('reset')) return false;
+    const val = params.get('reset');
+    if (val === null) return true;
+    const normalized = String(val).trim().toLowerCase();
+    if (normalized === '' || normalized === '1' || normalized === 'true' || normalized === 'yes') return true;
+    if (normalized === '0' || normalized === 'false' || normalized === 'no') return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearStoredSession(){
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+  try { localStorage.removeItem('dp.session'); } catch {}
+}
+
+function maybeResetFromQuery(){
+  if (!shouldResetFromQuery()) return false;
+  WS.cancelReconnect?.();
+  state.shouldReconnect = false;
+  state.roomId = '';
+  state.playerId = '';
+  clearStoredSession();
+  setStatus('Waiting to join…');
+  try { state.els?.joinCard?.classList?.remove('hidden'); } catch {}
+  try { state.els?.lobbyArea?.classList?.add('hidden'); } catch {}
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('reset');
+    const qs = url.searchParams.toString();
+    const next = url.pathname + (qs ? `?${qs}` : '') + url.hash;
+    window.history.replaceState({}, document.title, next);
+  } catch {}
+  return true;
+}
+
 function tryAutoResume(){
   const s = loadStoredSession();
   if (!s?.roomId || !s?.playerId) return;
@@ -109,6 +150,7 @@ function boot(){
   initUi();       // wire DOM refs so router/catalog can render the grid
   bindJoin();
   wireRouter();   // non-blocking
-  tryAutoResume();
+  const didReset = maybeResetFromQuery();
+  if (!didReset) tryAutoResume();
 }
 document.addEventListener('DOMContentLoaded', boot);
