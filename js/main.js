@@ -1,10 +1,10 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
-import * as WS from './ws.js?v=11.0.9';
-import { renderCatalog } from './features/catalog.js?v=11.0.9';
-import { state } from './state.js?v=11.0.9';
-import { initUi, hideJoinCard, resetToLobbyUi } from './ui.js?v=11.0.9';
-import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.9';
-import { onSocketMessage } from './router.js?v=11.0.9';
+import * as WS from './ws.js?v=11.0.10';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.10';
+import { state } from './state.js?v=11.0.10';
+import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.10';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.10';
+import { onSocketMessage } from './router.js?v=11.0.10';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -78,6 +78,13 @@ async function onJoinClicked(e){
     const j = await resp.json().catch(()=>({}));
     const playerId = j.playerId || j.id || '';
     if (!playerId){ setStatus('Join failed (no playerId)'); toast('Bad server response.'); return; }
+
+    const joinCatalog = extractCatalogEntries(j);
+    if (Array.isArray(joinCatalog)) {
+      setLobbyVisible(true);
+      setPhase('lobby');
+      renderCatalog(joinCatalog);
+    }
 
     // >>> CRITICAL: set state before opening WS <<<
     state.roomId = room;

@@ -1,5 +1,5 @@
-import { SESSION_KEY } from './config.js?v=11.0.9';
-import { state } from './state.js?v=11.0.9';
+import { SESSION_KEY } from './config.js?v=11.0.10';
+import { state } from './state.js?v=11.0.10';
 
 export function saveSession() {
   if (!state.roomId || !state.playerId) return;
