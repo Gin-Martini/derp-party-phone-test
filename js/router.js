@@ -3,6 +3,7 @@ import { state } from './state.js';
 import { renderCatalog } from './features/catalog.js';
 import { setStatus, setLobbyVisible, setPhase } from './ui.js';
 import { wsSend, setOnSocketMessage } from './ws.js';
+
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -25,8 +26,7 @@ function findPatchTriplet(root) {
     const n = q.shift();
     if (!n || typeof n !== 'object') continue;
     const cand = n.payload || n.body || n.data || n;
-    const hasTriplet = (o) =>
-      o && (Array.isArray(o.add) || Array.isArray(o.update) || Array.isArray(o.remove));
+    const hasTriplet = (o) => o && (Array.isArray(o.add) || Array.isArray(o.update) || Array.isArray(o.remove));
     if (hasTriplet(cand)) return cand;
     for (const k of Object.keys(n)) {
       const v = n[k];
@@ -64,12 +64,12 @@ function applyCatalogPatch(trip) {
 }
 
 function setDbg(s) {
-  const pill = document.querySelector('#dbgLast, .dbg-last, .pill-last');
+  const pill = document.querySelector('#dbg, #dbgLast, .dbg-last, .pill-last');
   if (pill) pill.textContent = `last: ${s}`;
 }
 
 // ---------- main router ----------
-export function onSocketMessage(msg){
+export async function onSocketMessage(msg){
   try {
     // Accept raw string, already-parsed object, or Event with .data (Blob/ArrayBuffer/String)
     let raw = msg;
@@ -127,7 +127,7 @@ export function onSocketMessage(msg){
           return;
         }
 
-        // 2) Patch batches (this is what your host is sending)
+        // 2) Patch batches (host sends these)
         if (typed === 'CHARACTER_CATALOG_PATCH' || Array.isArray(env.patches) || Array.isArray(env.patch)) {
           const packs = A(env.patches || env.patch);
           if (!state.catalog) state.catalog = { entries: [] };
@@ -177,5 +177,5 @@ export function onSocketMessage(msg){
   }
 }
 
-// Optional: if your ws layer wires events instead of raw strings
+// Optional: one-liner wiring if you prefer importing only this
 export function onSocketEvent(ev) { return setOnSocketMessage(onSocketMessage); }
