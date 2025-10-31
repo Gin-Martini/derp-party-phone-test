@@ -1,3 +1,4 @@
+// js/features/catalog.js — FULL FILE (adds empty-state hint)
 import { state } from '../state.js';
 import { setDbg, resolvePortraitSrc } from '../ui.js';
 
@@ -8,7 +9,17 @@ export function renderCatalog(entries) {
   // Clear and (re)fill
   grid.replaceChildren();
 
-  (entries || []).forEach((e, idx) => {
+  const list = entries || [];
+  if (list.length === 0) {
+    const hint = document.createElement('div');
+    hint.className = 'emptyHint';
+    hint.textContent = 'Waiting for the host to publish characters…';
+    grid.appendChild(hint);
+    setDbg('catalog: empty');
+    return;
+  }
+
+  list.forEach((e, idx) => {
     const id    = String(e.id ?? idx);
     const label = e.label || e.id || ('Char ' + (idx + 1));
     const src   = resolvePortraitSrc({
@@ -54,36 +65,23 @@ export function renderCatalog(entries) {
     grid.appendChild(btn);
   });
 
-  // Initial visual state
-  markTaken([]);
-  markSelected(state.myCharId);
+  setDbg(`catalog: ${list.length} entries`);
 }
 
-/** Visually mark taken characters, disabling those not mine. */
-export function markTaken(list) {
-  state.takenChars.clear();
-  (list || []).forEach(id => state.takenChars.add(String(id)));
-
-  const grid = state.els.charGrid;
-  if (!grid) return;
-
-  // Spread the NodeList so we can forEach safely
-  [...grid.querySelectorAll('.charBtn')].forEach(b => {
-    const id = b.dataset.charId;
-    const isTaken = state.takenChars.has(id);
-    const isMine  = (id === state.myCharId);
-    b.classList.toggle('taken', isTaken && !isMine);
-    b.disabled = isTaken && !isMine;
+// Optional helpers if you already import these elsewhere:
+export function markTaken(takenSet){
+  const grid = state.els.charGrid; if (!grid) return;
+  const taken = new Set(Array.from(takenSet || []));
+  grid.querySelectorAll('.charBtn').forEach(btn=>{
+    const id = btn.dataset.charId;
+    btn.classList.toggle('taken', taken.has(id));
+    btn.disabled = taken.has(id);
   });
 }
 
-/** Highlight the currently selected character. */
-export function markSelected(id) {
-  const grid = state.els.charGrid;
-  if (!grid) return;
-
-  [...grid.querySelectorAll('.charBtn')].forEach(b => {
-    b.classList.toggle('selected', b.dataset.charId === String(id));
+export function markSelected(myId){
+  const grid = state.els.charGrid; if (!grid) return;
+  grid.querySelectorAll('.charBtn').forEach(btn=>{
+    btn.classList.toggle('selected', btn.dataset.charId === myId);
   });
-  setDbg('selected=' + id);
 }
