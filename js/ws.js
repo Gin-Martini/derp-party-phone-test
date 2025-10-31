@@ -1,7 +1,7 @@
 // js/ws.js — phone WS layer (fixed handshake)
-import { state } from './state.js';
-import { setPhase, setStatus, setLobbyVisible, showToast } from './ui.js';
-import { saveSession, clearSession } from './session.js';
+import { state } from './state.js?v=11.0.5';
+import { setPhase, setStatus, setLobbyVisible, showToast, resetToLobbyUi } from './ui.js?v=11.0.5';
+import { saveSession, clearSession } from './session.js?v=11.0.5';
 
 // message router hook (set by router.js)
 let _onSocketMessage = () => {};
@@ -78,8 +78,6 @@ export function connectWs(){
     } catch {}
 
     setStatus('Connected.', true);
-    state.els.joinCard?.classList.add('hidden');
-    setLobbyVisible(true);
     saveSession();
 
     clearInterval(state.hbInterval);
