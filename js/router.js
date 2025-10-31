@@ -90,7 +90,15 @@ export function onSocketMessage(ev) {
   const msg = (typeof data === 'object' && data) ? data : { type: 'TEXT', message: String(data ?? '') };
   const rawType = msg.type || msg.kind || msg.event || (msg.payload && msg.payload.type);
   const type = normType(rawType);
-  const payload = msg.payload && typeof msg.payload === 'object' ? msg.payload : msg;
+  let payload = (msg.payload && typeof msg.payload === 'object') ? msg.payload : msg;
+  if (payload && typeof payload === 'object') {
+    if (payload.state && typeof payload.state === 'object') {
+      // merge state-level fields up one layer
+      payload = { ...payload, ...payload.state };
+    } else if (payload.data && typeof payload.data === 'object') {
+      payload = { ...payload, ...payload.data };
+    }
+  }
 
   setDbg('msg=' + type);
 
