@@ -1,263 +1,272 @@
-import { state } from './state.js';
-import { setPhase, setStatus, setLobbyVisible, log, setDbg, showToast } from './ui.js';
-import { renderCatalog, markTaken, markSelected } from './features/catalog.js';
-import { showRollOverlay, hideRollOverlay, updateRollUI } from './features/rollOverlay.js';
-import { showTriviaPadIfAllowed, endTriviaPad } from './features/triviaPad.js';
-import { idsEqual, isMeFrom } from './ui.js';
-import { endSession } from './ws.js';
+// js/router.js — FULL FILE (drop-in)
+// Version tag kept for cache-bust parity with other modules.
+import { state } from './state.js?v=11.0.1';
+import {
+  setDbg, setStatus, setLobbyVisible, setPhase, showToast,
+  enableReadyButton, setReadyUI, idsEqual, isMeFrom
+} from './ui.js?v=11.0.1';
+import { renderCatalog, markTaken, markSelected } from './features/catalog.js?v=11.0.1';
+import { updateRollUI, showRollOverlay, hideRollOverlay } from './features/rollOverlay.js?v=11.0.1';
+import { showTriviaPadIfAllowed } from './features/triviaPad.js?v=11.0.1';
+import { wsSend } from './ws.js';
 
-export function normType(t){
-  if(!t) return t;
-  const upper = String(t).trim().toUpperCase();
-  const m = {
-    'TURNORDER_START':'TURN_ORDER_START',
-    'TURNORDER_ROLL':'TURN_ORDER_FEEDBACK',
-    'TURNORDER_FEEDBACK':'TURN_ORDER_FEEDBACK',
-    'TURNORDER_DONE':'TURN_ORDER_DONE',
-    'START_TURN':'YOUR_TURN',
-    'YOURTURN':'YOUR_TURN',
-    'TURN_START':'YOUR_TURN',
-    'TURNBEGIN':'YOUR_TURN',
-    'TURN_BEGIN':'YOUR_TURN',
-    'PLAYER_TURN':'YOUR_TURN',
-    'CURRENT_TURN':'YOUR_TURN',
-    'PROMPT_ROLL':'ROLL_PROMPT',
-    'ROLLREQUEST':'ROLL_PROMPT',
-    'ROLL_REQUEST':'ROLL_PROMPT',
-    'ROLLNOW':'ROLL_PROMPT',
-    'TURN_PROMPT':'ROLL_PROMPT',
-    'TRIVIA_BEGIN':'TRIVIA_START',
-    'TRIVIA_OPEN':'TRIVIA_START',
-    'TRIVIA_PROMPT':'TRIVIA_START',
-    'QUESTION_START':'TRIVIA_START',
-    'PROMPT_TRIVIA':'TRIVIA_START',
-    'ANSWER_WINDOW_OPEN':'TRIVIA_START',
-    'TRIVIA_DONE':'TRIVIA_END',
-    'TRIVIA_CLOSE':'TRIVIA_END',
-    'TRIVIA_RESULT':'TRIVIA_END',
-    'ANSWER_WINDOW_CLOSE':'TRIVIA_END',
+// --- helpers ---
+const normType = (() => {
+  const map = new Map([
+    // connection / hello
+    ['HELLO', 'HELLO'], ['HELLO_OK', 'HELLO_OK'], ['WELCOME', 'HELLO_OK'],
+    // lobby open/closed/state
+    ['LOBBY_OPEN', 'LOBBY_OPEN'], ['LOBBY_CLOSED', 'LOBBY_CLOSED'],
+    ['STATE', 'STATE'], ['LOBBY_STATE', 'STATE'],
+    // character flows
+    ['CHARACTER_CATALOG', 'CHARACTER_CATALOG'],
+    ['CHARACTER_SELECT', 'CHARACTER_SELECT'],
+    ['CHARACTER_TAKEN', 'CHARACTER_TAKEN'], ['SELECTED', 'CHARACTER_TAKEN'],
+    // ready
+    ['READY', 'READY'], ['UNREADY', 'UNREADY'],
+    // turn order / roll
+    ['TURN_ORDER_START', 'TURN_ORDER_START'],
+    ['TURN_ORDER_RESULT', 'TURN_ORDER_RESULT'],
+    ['ROLL', 'ROLL'], ['ROLL_RESULT', 'ROLL_RESULT'], ['PLAYER_ROLL', 'PLAYER_ROLL'],
+    // trivia
+    ['TRIVIA_START', 'TRIVIA_START'], ['TRIVIA_SWITCH', 'TRIVIA_SWITCH'],
+    ['TRIVIA_END', 'TRIVIA_END'], ['TRIVIA_ALLOWED', 'TRIVIA_ALLOWED'],
+    ['TRIVIA_BLOCKED', 'TRIVIA_BLOCKED'],
+    // misc
+    ['TEXT', 'TEXT'], ['MESSAGE', 'TEXT']
+  ]);
+  return t => {
+    const k = String(t || '').trim().toUpperCase().replace(/[^A-Z0-9_]/g, '');
+    return map.get(k) || k || 'TEXT';
   };
-  if (m[upper]) return m[upper];
-  const soloSanitized = upper.replace(/-/g, '_');
-  if (soloSanitized.startsWith('SOLO_TRIVIA_')) return ('TRIVIA_' + soloSanitized.slice('SOLO_TRIVIA_'.length));
-  if (soloSanitized.startsWith('SOLOTRIVIA_'))   return ('TRIVIA_' + soloSanitized.slice('SOLOTRIVIA_'.length));
-  if (soloSanitized.startsWith('SOLO_'))         return soloSanitized.slice('SOLO_'.length);
-  if (soloSanitized.startsWith('SOLOTRIVIA'))    return ('TRIVIA' + soloSanitized.slice('SOLOTRIVIA'.length));
-  if (upper.startsWith('SOLOTRIVIA'))            return ('TRIVIA' + upper.slice('SOLOTRIVIA'.length));
-  return upper;
+})();
+
+const coalesce = (obj, ...keys) => {
+  for (const k of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, k) && obj[k] != null) return obj[k];
+  }
+  return undefined;
+};
+
+const toIdList = (v) => {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.flatMap(toIdList).map(x => String(x)).filter(Boolean);
+  if (typeof v === 'object') {
+    // object map -> true flags or nested values
+    const keys = Object.keys(v);
+    if (keys.length && keys.every(k => typeof v[k] === 'boolean')) {
+      return keys.filter(k => v[k]).map(String);
+    }
+    return keys.flatMap(k => toIdList(v[k]));
+  }
+  return [String(v)];
+};
+
+function applyTaken(list) {
+  const taken = (list || []).map(String);
+  markTaken(taken);                 // updates state.takenChars + disables buttons
 }
 
-export function onSocketMessage(ev){
-  log('< ' + ev.data);
+function ensureLobbyShown() {
+  setPhase('lobby');
+  setLobbyVisible(true);
+  hideRollOverlay();
+  enableReadyButton(!!state.myCharId);
+}
+
+// --- main router ---
+export function onSocketMessage(ev) {
+  let data = ev?.data;
   try {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === 'PONG') return;
+    if (typeof data === 'string' && data.trim().startsWith('{')) data = JSON.parse(data);
+  } catch (e) {
+    // leave as raw string
+  }
 
-    const isWrapped = (msg && msg.type === 'STATE' && msg.state);
-    const inner = isWrapped ? msg.state : msg;
-    const type = normType(inner.type || msg.type);
-    const payload = inner;
-    setDbg(type || 'unknown');
+  // normalize shape
+  const msg = (typeof data === 'object' && data) ? data : { type: 'TEXT', message: String(data ?? '') };
+  const rawType = msg.type || msg.kind || msg.event || (msg.payload && msg.payload.type);
+  const type = normType(rawType);
+  const payload = msg.payload && typeof msg.payload === 'object' ? msg.payload : msg;
 
-    if (type === 'WELCOME' || type === 'HELLO' || type === 'CONNECTED') {
-      // rehydrate ping happens from ws.onopen’s schedule
+  setDbg('msg=' + type);
+
+  // ---- switchboard ----
+  switch (type) {
+
+    case 'TEXT': {
+      const m = payload.message || payload.text || String(data ?? '');
+      if (m) setStatus(m);
       return;
     }
 
-    // ===== terminal signals =====
-    if (type === 'ROOM_CLOSED' || type === 'SESSION_END' || type === 'GAME_ENDED') {
-      endSession(payload.reason || 'Host ended the session'); return;
-    }
-    if (type === 'KICKED' || type === 'PLAYER_KICKED') {
-      const pid = (payload.playerId || payload.id || '').trim();
-      if (!pid || idsEqual(pid, state.playerId)) { endSession('You were removed by the host'); return; }
+    case 'HELLO_OK': {
+      // May include ids; tolerate absence
+      const pid = payload.playerId || payload.id;
+      const rid = payload.roomId || payload.room;
+      if (pid) state.playerId = String(pid);
+      if (rid) state.roomId = String(rid);
+      setStatus('Joined room.');
+      return;
     }
 
-    if (type === 'TEXT' && payload.message) showToast(payload.message);
+    // ===== LOBBY / CATALOG =====
+    case 'CHARACTER_CATALOG': {
+      const entries = coalesce(payload, 'entries', 'list', 'characters') || [];
+      ensureLobbyShown();
+      renderCatalog(entries); // builds grid fresh
+      // If server also sends taken immediately with catalog, apply it
+      const taken = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
+      if (taken != null) applyTaken(toIdList(taken));
+      // keep selection visible
+      markSelected(state.myCharId);
+      setStatus('Pick a character, then tap “I’m Ready”.');
+      return;
+    }
 
-    // === TURN-ORDER ===
-    if (type === 'TURN_ORDER_START') {
+    case 'LOBBY_OPEN': {
+      ensureLobbyShown();
+      setStatus('Lobby open — pick a character, then Ready.');
+      enableReadyButton(!!state.myCharId);
+      return;
+    }
+
+    case 'LOBBY_CLOSED': {
+      setStatus('Lobby closed — waiting…');
+      enableReadyButton(false);
+      return;
+    }
+
+    case 'STATE': {
+      // Generic state snapshot (lobby/roll/trivia hints may be present)
+      // Taken chars
+      const taken = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
+      if (taken != null) applyTaken(toIdList(taken));
+
+      // My selection (several possible shapes)
+      const selPid = coalesce(payload, 'playerId', 'pid', 'player');
+      const selName = coalesce(payload, 'playerName', 'name');
+      const selChar = coalesce(payload, 'charId', 'characterId', 'char', 'id');
+      if (selChar != null && isMeFrom(selPid, selName)) {
+        state.myCharId = String(selChar);
+        markSelected(state.myCharId);
+        enableReadyButton(true);
+      }
+
+      // Ready state (mine)
+      const readyMap = coalesce(payload, 'readyPlayers', 'readyMap', 'readyByPlayer');
+      if (readyMap && typeof readyMap === 'object' && state.playerId) {
+        const mine = !!readyMap[state.playerId] || !!readyMap[String(state.playerId)];
+        setReadyUI(!!mine);
+      }
+      if (payload.ready === true && isMeFrom(selPid, selName)) setReadyUI(true);
+      if (payload.ready === false && isMeFrom(selPid, selName)) setReadyUI(false);
+
+      // Trivia pad gating (quiet refresh)
+      showTriviaPadIfAllowed(payload, { quiet: true });
+
+      // Show lobby if a catalog is implied
+      if (payload.entries || payload.characters || payload.catalog) ensureLobbyShown();
+      return;
+    }
+
+    // ===== CHARACTER EVENTS =====
+    case 'CHARACTER_SELECT': {
+      // Echo from server when anyone selects; if it's me, lock UI affordances
+      const pid = coalesce(payload, 'playerId', 'pid', 'player');
+      const pname = coalesce(payload, 'playerName', 'name');
+      const cid = coalesce(payload, 'charId', 'characterId', 'char', 'id');
+      if (cid != null && isMeFrom(pid, pname)) {
+        state.myCharId = String(cid);
+        markSelected(state.myCharId);
+        enableReadyButton(true);
+        setDbg('my select=' + state.myCharId);
+      }
+      return;
+    }
+
+    case 'CHARACTER_TAKEN': {
+      // Update visual taken list; tolerate various shapes
+      const tidOne = coalesce(payload, 'charId', 'characterId', 'id');
+      const tidMany = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
+      let next = new Set(state.takenChars);
+      if (tidMany != null) toIdList(tidMany).forEach(id => next.add(String(id)));
+      if (tidOne != null) next.add(String(tidOne));
+      // Never block *my* currently selected id
+      next.delete(state.myCharId || '');
+      applyTaken([...next]);
+      return;
+    }
+
+    // ===== READY =====
+    case 'READY': {
+      const pid = coalesce(payload, 'playerId', 'pid', 'player');
+      const pname = coalesce(payload, 'playerName', 'name');
+      if (isMeFrom(pid, pname)) setReadyUI(true);
+      return;
+    }
+    case 'UNREADY': {
+      const pid = coalesce(payload, 'playerId', 'pid', 'player');
+      const pname = coalesce(payload, 'playerName', 'name');
+      if (isMeFrom(pid, pname)) setReadyUI(false);
+      return;
+    }
+
+    // ===== TURN ORDER / ROLL =====
+    case 'TURN_ORDER_START': {
       setPhase('turn_order');
       state.inTurnOrder = true;
-      state.playerNameById.clear();
-      const arr = payload.players || payload.order || [];
-      for (const p of arr) if (p && (p.playerId || p.id)) {
-        const pid = p.playerId || p.id;
-        state.playerNameById.set(pid, p.name || pid);
-      }
       state.myHasRolled = false;
-      showRollOverlay('Roll for Turn Order');
+      showRollOverlay('Turn Order');
+      updateRollUI();
+      setStatus('Rolling for turn order…');
+      return;
+    }
+
+    case 'PLAYER_ROLL': {
+      // another player's roll event; UI reacts when result arrives
+      return;
+    }
+
+    case 'ROLL_RESULT': {
+      // server might send { playerId, value } or a summary
+      const v = coalesce(payload, 'value', 'v', 'roll', 'result');
+      if (v != null && state.els.rollValue) state.els.rollValue.textContent = String(v);
+      const done = !!payload.done;
+      if (done && state.els.rollState) {
+        state.els.rollState.textContent = 'Done';
+        state.els.rollState.classList.remove('no'); state.els.rollState.classList.add('ok');
+      }
       updateRollUI();
       return;
     }
 
-    if (type === 'TURN_ORDER_FEEDBACK') {
-      const who  = payload.playerId || payload.id;
-      const roll = (payload.roll != null ? payload.roll : payload.value);
-      if (who === state.playerId) {
-        state.myHasRolled = true;
-        state.els.rollValue.textContent = String(roll);
-        state.els.rollState.textContent = 'Rolled';
-        state.els.rollState.classList.add('ok'); state.els.rollState.classList.remove('no');
-      }
-      updateRollUI(); return;
-    }
-
-    if (type === 'TURN_ORDER_DONE') {
+    case 'TURN_ORDER_RESULT': {
+      // final order text, hide roll affordance, show summary
       state.inTurnOrder = false;
-      setPhase('in_game');
-      const ordered = payload.ordered || payload.order || [];
-      const rolls   = payload.rolls || payload.values || {};
-      const lines = ordered.map((pid,i)=>{
-        const name = state.playerNameById.get(pid) || pid;
-        const me   = (pid === state.playerId) ? ' (you)' : '';
-        const r    = (rolls && rolls[pid] != null) ? ` — ${rolls[pid]}` : '';
-        return `${i+1}. ${name}${me}${r}`;
-      }).join('<br/>');
-      state.els.orderResult.innerHTML = lines;
-      state.els.orderResult.classList.remove('hidden');
-
-      state.canRollNow = false;
-      state.els.rollState.textContent = 'Waiting…';
-      state.els.rollState.classList.remove('ok');
-      state.els.rollState.classList.add('no');
-      updateRollUI(); return;
-    }
-
-    // === MAIN GAME TURNS ===
-    if (type === 'YOUR_TURN') {
-      setPhase('in_game');
-      const pid   = (payload.playerId || payload.id || '').trim();
-      const pname = (payload.name || '').trim();
-      const isMe  = isMeFrom(pid, pname);
-      if (!pid && !isMe) return;
-
-      state.canRollNow = isMe;
-      if (isMe) {
-        state.els.rollState.textContent = 'Waiting…';
-        state.els.rollState.classList.remove('ok'); state.els.rollState.classList.add('no');
-        showRollOverlay('Your Turn — Roll!');
-        showToast('🎲 Your turn! Tap Roll.');
-      } else {
-        hideRollOverlay();
-        showToast('⏳ Waiting for other player…', 1200);
+      state.myHasRolled = true;
+      if (state.els.orderResult) {
+        state.els.orderResult.classList.remove('hidden');
+        state.els.orderResult.textContent = payload.text || payload.order || 'Order set.';
       }
-      updateRollUI(); return;
-    }
-
-    if (type === 'ROLL_PROMPT') {
-      setPhase('in_game');
-      const pid   = (payload.playerId || payload.id || '').trim();
-      const pname = (payload.name || '').trim();
-      const isMe  = isMeFrom(pid, pname);
-      state.canRollNow = !!isMe;
-      if (isMe) {
-        state.els.rollState.textContent = 'Waiting…';
-        state.els.rollState.classList.remove('ok'); state.els.rollState.classList.add('no');
-        showRollOverlay('Your Turn — Roll!');
-        showToast('🎲 Your turn! Tap Roll.');
-      }
-      updateRollUI(); return;
-    }
-
-    if (type === 'MOVE_BEGIN') {
-      if (idsEqual(payload.playerId || payload.id, state.playerId)) {
-        state.els.rollState.textContent = 'Rolled';
-        state.els.rollState.classList.add('ok'); state.els.rollState.classList.remove('no');
-      }
-      state.canRollNow = false; updateRollUI(); return;
-    }
-    if (type === 'MOVE_END') { state.canRollNow = false; hideRollOverlay(); updateRollUI(); return; }
-
-    // === SPACE / COINS feedback ===
-    if (type === 'SPACE_LANDED') { showToast(`🧭 Landed on ${payload.spaceType || 'Unknown'} (space ${payload.spaceIndex})`); return; }
-    if (type === 'COINS_DELTA') {
-      const d = Number(payload.delta || 0);
-      const total = Number(payload.total || 0);
-      const sign = d > 0 ? '+' : '';
-      showToast(`🪙 Coins ${sign}${d} → ${total}`); return;
-    }
-    if (type === 'SPACE_RESOLVE') { showToast(`✅ ${payload.outcome || 'Resolved'}`); return; }
-
-    // === TRIVIA ===
-    if (type === 'TRIVIA_START') { showTriviaPadIfAllowed(payload); return; }
-    if (type === 'TRIVIA_END') {
-      endTriviaPad(); state.triviaAllowed = null; state.triviaMode = 'PENDING';
-      if (payload && payload.winnerId) {
-        const coins = Number(payload.awarded || 0);
-        showToast(`🏆 ${payload.winnerId} won ${coins>0?`+${coins}`:''}`);
-      }
-      return;
-    }
-    if (type === 'TRIVIA_SWITCH') {
-      showTriviaPadIfAllowed(payload, { quiet:true });
-      showToast('🔁 New question!'); return;
-    }
-
-    // Handle catalog messages whether or not they're wrapped in STATE
-    if (type === 'CHARACTER_CATALOG') {
-      const list = (payload.entries || payload.catalog || []);
-      renderCatalog(list);
+      updateRollUI();
       return;
     }
 
-    // ---- STATE snapshots / legacy trivia paths ----
-    if (msg.type === 'STATE') {
-      const s = msg.state || {};
-      const stateType = normType(s.type);
-
-      if (s.trivia && (s.trivia.open === true || s.trivia.phase === 'start' || s.trivia.phase === 'open')) { showTriviaPadIfAllowed(s.trivia, { quiet:true }); return; }
-      if (s.trivia && (s.trivia.closed === true || s.trivia.phase === 'end' || s.trivia.phase === 'closed' || s.trivia.phase === 'result')) { endTriviaPad(); state.triviaAllowed = null; state.triviaMode = 'PENDING'; return; }
-
-      if (stateType === 'TRIVIA_START' || s.answerWindowOpen === true || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis > 0)) { showTriviaPadIfAllowed(s, { quiet:true }); return; }
-      if (stateType === 'TRIVIA_END'   || s.answerWindowOpen === false || (typeof s.answerWindowMillis === 'number' && s.answerWindowMillis <= 0)) { endTriviaPad(); state.triviaAllowed = null; state.triviaMode = 'PENDING'; return; }
-
-      if (stateType === 'CHARACTER_CATALOG') { renderCatalog(s.entries||[]); return; }
-
-      if (stateType === 'LOBBY_STATE') {
-        setPhase('lobby');
-        hideRollOverlay();
-        const players = s.players||[];
-        const text = players.length
-          ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
-          : '—';
-        setStatus('Lobby: ' + text, true);
-        markTaken(s.taken||[]);
-        const me = players.find(p => (p.playerId && p.playerId===state.playerId) || (p.name && p.name===(state.els.nameInput?.value||'').trim()));
-        if (me && !!me.ready !== state.myReady) {
-          state.myReady = !!me.ready;
-        }
-        state.canRollNow = false; state.inTurnOrder = false; state.myHasRolled = false;
-        updateRollUI(); return;
-      }
-
-      if (stateType === 'CHARACTER_TAKEN')  { markTaken([...(state.takenChars), String(s.charId)]); return; }
-      if (stateType === 'CHARACTER_PICKED') { if (idsEqual(s.playerId, state.playerId)) { state.myCharId = s.charId || null; markSelected(state.myCharId); } return; }
-
-      if (stateType === 'LOBBY_LOCKED') {
-        setStatus('Game starting…', true);
-        state.myReady = false;
-        state.els.lobbyArea?.classList.add('hidden');
-        setPhase('in_game');
-        hideRollOverlay();
-        updateRollUI(); return;
-      }
-
-      if (stateType === 'TURN_STATE' || stateType === 'CURRENT_TURN') {
-        if (state.phase === 'lobby') return;
-        const pid = s.currentPlayerId || (s.turn && s.turn.currentPlayerId);
-        const pname = s.currentPlayerName || (s.turn && s.turn.currentPlayerName) || state.playerNameById.get(pid) || s.name || '';
-        const isMe = (pid && idsEqual(pid, state.playerId)) || (!!pname && idsEqual(pname, (state.els.nameInput?.value||'').trim()));
-        state.canRollNow = !!isMe;
-        if (isMe) {
-          showRollOverlay('Your Turn — Roll!');
-          state.els.rollState.textContent = 'Waiting…';
-          state.els.rollState.classList.remove('ok'); state.els.rollState.classList.add('no');
-        } else { hideRollOverlay(); }
-        updateRollUI(); return;
-      }
-
-      if (s.type === 'TEXT') { showToast('📣 ' + (s.message || 'Info')); return; }
+    // ===== TRIVIA (PAD GATING ONLY ON PHONE) =====
+    case 'TRIVIA_START':
+    case 'TRIVIA_SWITCH':
+    case 'TRIVIA_ALLOWED':
+    case 'TRIVIA_BLOCKED':
+    case 'TRIVIA_END': {
+      showTriviaPadIfAllowed(payload);
+      return;
     }
-  } catch(e) { console.error(e); }
+
+    default: {
+      // Unknown: light surface feedback, but don't error
+      setDbg('unhandled=' + type);
+      return;
+    }
+  }
 }
