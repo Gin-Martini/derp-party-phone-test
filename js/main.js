@@ -249,13 +249,36 @@ function tryAutoResume(){
   }
 
   const room = String(storedSession.roomId || '').trim().toUpperCase();
+  const playerId = String(storedSession.playerId || '').trim();
   const name = (storedSession.name || '').trim();
   if ($('#room')) $('#room').value = room;
   if ($('#name')) $('#name').value = name || 'Player';
 
-  updateJoinButtonLabel(true);
-  showResumeButton(room);
-  setStatus(room ? `Saved session found for room ${room}. Tap Resume or Switch Room.` : 'Saved session found. Tap Resume or Switch Room.');
+  if (!room || !playerId){
+    storedSession = null;
+    hideResumeButton();
+    updateJoinButtonLabel(false);
+    toast('Saved session was incomplete. Enter a room code.');
+    return;
+  }
+
+  state.roomId = room;
+  state.playerId = playerId;
+  state.shouldReconnect = true;
+
+  const resumeBtn = $('#btnResume');
+  if (resumeBtn){
+    updateJoinButtonLabel(true);
+    showResumeButton(room);
+    setStatus(room ? `Saved session found for room ${room}. Tap Resume or Switch Room.` : 'Saved session found. Tap Resume or Switch Room.');
+    return;
+  }
+
+  hideResumeButton();
+  updateJoinButtonLabel(false);
+  hideJoinCard();
+  setStatus(room ? `Saved session found for room ${room}. Reconnecting…` : 'Saved session found. Reconnecting…', true);
+  WS.connectWs?.();
 }
 
 // --- BOOT ---
