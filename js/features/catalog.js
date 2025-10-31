@@ -5,6 +5,7 @@ import { wsSend } from '../ws.js?v=11.0.12';
 
 const ID_KEYS = ['id', 'characterId', 'key', 'slug', 'code'];
 const LOOKS_LIKE_ENTRY_KEYS = ['label', 'name', 'title', 'portrait', 'portraitUrl', 'portraitData', 'imageUrl'];
+const PORTRAIT_KEYS = ['portrait', 'portraitUrl', 'portraitData', 'imageUrl'];
 
 function normalizeEntries(list) {
   if (!Array.isArray(list)) return [];
@@ -29,12 +30,20 @@ function looksLikeCatalogEntry(node) {
   return LOOKS_LIKE_ENTRY_KEYS.some(k => node[k] !== undefined && node[k] !== null && String(node[k]).trim() !== '');
 }
 
+function hasPortraitLikeData(obj = {}) {
+  return PORTRAIT_KEYS.some((key) => {
+    const value = obj[key];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+}
+
 function tryArrayAsCatalog(arr, { allowEmpty = false } = {}) {
   if (!Array.isArray(arr)) return null;
   if (!arr.length) return allowEmpty ? [] : null;
   const objects = arr.filter(item => item && typeof item === 'object');
   if (!objects.length) return null;
   if (!objects.some(looksLikeCatalogEntry)) return null;
+  if (!objects.some(hasPortraitLikeData)) return null;
   return normalizeEntries(objects);
 }
 
