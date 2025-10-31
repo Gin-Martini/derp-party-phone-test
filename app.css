@@ -25,6 +25,7 @@ input{width:100%}
 .hidden{display:none!important}
 .btn-primary{border-color:#2563eb;background:#1e40af}
 .btn-accent{border-color:#155e75;background:#0e3a47}
+.btn-secondary{border-color:#4b5563;background:#1f2937;color:#e5e7eb}
 .btn-reset{border-color:#374151;background:#111827;color:#d1d5db}
 .btn-disabled{opacity:.6;pointer-events:none}
 

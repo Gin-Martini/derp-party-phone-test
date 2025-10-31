@@ -1,4 +1,4 @@
-import { state } from './state.js?v=11.0.6';
+import { state } from './state.js?v=11.0.7';
 
 // DOM helpers + visual utilities (status, toast, log, etc.)
 export function initUi() {
