@@ -1,8 +1,8 @@
 // js/ws.js — phone WS layer (fixed handshake)
-import { state } from './state.js?v=11.0.6';
-import { setPhase, setStatus, setLobbyVisible, showToast, resetToLobbyUi } from './ui.js?v=11.0.6';
-import { saveSession, clearSession } from './session.js?v=11.0.6';
-import { TERMINAL_CLOSE_CODES } from './config.js?v=11.0.6';
+import { state } from './state.js?v=11.0.11';
+import { setPhase, setStatus, setLobbyVisible, showToast, resetToLobbyUi } from './ui.js?v=11.0.11';
+import { saveSession, clearSession } from './session.js?v=11.0.11';
+import { TERMINAL_CLOSE_CODES } from './config.js?v=11.0.11';
 
 const TERMINAL_CLOSE_REASON_PATTERNS = [
   /room\s+(closed|missing|not\s+found|expired)/i,

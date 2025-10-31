@@ -1,8 +1,10 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
-import * as WS from './ws.js?v=11.0.6';
-import { state } from './state.js?v=11.0.6';
-import { initUi, hideJoinCard } from './ui.js?v=11.0.6';
-import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.6';
+import * as WS from './ws.js?v=11.0.11';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.11';
+import { state } from './state.js?v=11.0.11';
+import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.11';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.11';
+import { onSocketMessage } from './router.js?v=11.0.11';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -17,10 +19,38 @@ function toast(msg){
   clearTimeout(toast._to); toast._to = setTimeout(()=>t.style.display='none', 1500);
 }
 
+let storedSession = null;
+
+// Wire the router immediately so the very first WS messages (HELLO/CATALOG) are handled.
+WS.setOnSocketMessage(onSocketMessage);
+
+function updateJoinButtonLabel(hasStored){
+  const btn = $('#btnJoin'); if (!btn) return;
+  btn.textContent = hasStored ? 'Join New Room' : 'Join Room';
+}
+
+function showResumeButton(room){
+  const btn = $('#btnResume');
+  if (!btn) return;
+  btn.textContent = room ? `Resume ${room}` : 'Resume Session';
+  btn.classList.remove('hidden');
+}
+
+function hideResumeButton(){
+  const btn = $('#btnResume');
+  if (btn) {
+    btn.classList.add('hidden');
+    btn.textContent = 'Resume Session';
+  }
+}
+
 // --- JOIN FLOW ---
 async function onJoinClicked(e){
   e?.preventDefault?.();
   WS.cancelReconnect?.();
+
+  const previousStored = storedSession || loadStoredSession();
+  const hadStored = !!(previousStored?.roomId && previousStored?.playerId);
 
   const room = String($('#room')?.value || '').trim().toUpperCase();
   const name = String($('#name')?.value || '').trim() || 'Player';
@@ -30,6 +60,7 @@ async function onJoinClicked(e){
   btn?.classList?.add('btn-disabled'); if (btn) btn.disabled = true;
   setStatus('Joining…', true);
 
+  let joinSucceeded = false;
   try {
     const url = `${HTTP_BASE}/rooms/${encodeURIComponent(room)}/join`;
     const resp = await fetch(url, {
@@ -48,10 +79,21 @@ async function onJoinClicked(e){
     const playerId = j.playerId || j.id || '';
     if (!playerId){ setStatus('Join failed (no playerId)'); toast('Bad server response.'); return; }
 
+    const joinCatalog = extractCatalogEntries(j);
+    if (Array.isArray(joinCatalog)) {
+      setLobbyVisible(true);
+      setPhase('lobby');
+      renderCatalog(joinCatalog);
+    }
+
     // >>> CRITICAL: set state before opening WS <<<
     state.roomId = room;
     state.playerId = String(playerId);
     state.shouldReconnect = true;
+
+    storedSession = null;
+    hideResumeButton();
+    updateJoinButtonLabel(false);
 
     // Persist (use canonical v2 key so reconnects work across pages)
     try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId: room, playerId, name })); } catch {}
@@ -59,11 +101,18 @@ async function onJoinClicked(e){
     setStatus('Joined. Connecting…', true);
     hideJoinCard();
     WS.connectWs?.(); // triggers HELLO on open using state.roomId/playerId
+    joinSucceeded = true;
   } catch (err){
     console.log('HTTP error:', err);
     setStatus('HTTP error'); toast('Network error while joining.');
   } finally {
     btn?.classList?.remove('btn-disabled'); if (btn) btn.disabled = false;
+    if (!joinSucceeded && hadStored && previousStored){
+      storedSession = previousStored;
+      const resumeRoom = String(previousStored.roomId || '').trim().toUpperCase();
+      updateJoinButtonLabel(true);
+      showResumeButton(resumeRoom);
+    }
   }
 }
 window._JOIN = onJoinClicked; // debug helper
@@ -76,14 +125,67 @@ function bindJoin(){
   $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
 }
 
-// --- Optional router wiring (cache-busted import) ---
-async function wireRouter(){
-  try {
-    const mod = await import('./router.js?v=11.0.6');
-    if (mod?.onSocketMessage && typeof WS.setOnSocketMessage === 'function') {
-      WS.setOnSocketMessage(mod.onSocketMessage);
-    }
-  } catch (e) { console.warn('router optional:', e?.message || e); }
+function onResetClicked(e){
+  e?.preventDefault?.();
+  WS.cancelReconnect?.();
+  try { state.ws?.close?.(); } catch {}
+  state.shouldReconnect = false;
+  state.roomId = '';
+  state.playerId = '';
+  clearStoredSession();
+  resetToLobbyUi();
+  setStatus('Waiting to join…');
+  toast('Session cleared. Enter room code.');
+}
+
+function bindSessionControls(){
+  const btn = $('#btnReset'); if (!btn) return;
+  const fire = (e)=>onResetClicked(e);
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
+}
+
+function onResumeClicked(e){
+  e?.preventDefault?.();
+  WS.cancelReconnect?.();
+
+  const session = storedSession || loadStoredSession();
+  if (!session?.roomId || !session?.playerId){
+    storedSession = null;
+    hideResumeButton();
+    updateJoinButtonLabel(false);
+    toast('Saved session not found. Enter a room code.');
+    return;
+  }
+
+  storedSession = session;
+  const room = String(session.roomId || '').trim().toUpperCase();
+  const playerId = String(session.playerId || '').trim();
+  if (!room || !playerId){
+    storedSession = null;
+    hideResumeButton();
+    updateJoinButtonLabel(false);
+    toast('Saved session was incomplete. Enter a room code.');
+    return;
+  }
+
+  const name = (session.name || '').trim();
+  if ($('#name')) $('#name').value = name || $('#name').value || 'Player';
+  state.roomId = room;
+  state.playerId = playerId;
+  state.shouldReconnect = true;
+
+  hideResumeButton();
+  updateJoinButtonLabel(false);
+
+  setStatus('Reconnecting…', true);
+  hideJoinCard();
+  WS.connectWs?.();
+}
+
+function bindResume(){
+  const btn = $('#btnResume'); if (!btn) return;
+  const fire = (e)=>onResumeClicked(e);
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
 }
 
 // --- AUTO-RESUME (supports old and new keys) ---
@@ -112,6 +214,9 @@ function shouldResetFromQuery(){
 function clearStoredSession(){
   try { localStorage.removeItem(SESSION_KEY); } catch {}
   try { localStorage.removeItem('dp.session'); } catch {}
+  storedSession = null;
+  hideResumeButton();
+  updateJoinButtonLabel(false);
 }
 
 function maybeResetFromQuery(){
@@ -135,22 +240,34 @@ function maybeResetFromQuery(){
 }
 
 function tryAutoResume(){
-  const s = loadStoredSession();
-  if (!s?.roomId || !s?.playerId) return;
-  $('#name') && ($('#name').value = s.name || 'Player');
-  state.roomId = String(s.roomId).trim().toUpperCase();
-  state.playerId = String(s.playerId).trim();
-  state.shouldReconnect = true;
-  setStatus('Reconnecting…', true);
-  WS.connectWs?.();
+  storedSession = loadStoredSession();
+  if (!storedSession?.roomId || !storedSession?.playerId){
+    storedSession = null;
+    hideResumeButton();
+    updateJoinButtonLabel(false);
+    return;
+  }
+
+  const room = String(storedSession.roomId || '').trim().toUpperCase();
+  const name = (storedSession.name || '').trim();
+  if ($('#room')) $('#room').value = room;
+  if ($('#name')) $('#name').value = name || 'Player';
+
+  updateJoinButtonLabel(true);
+  showResumeButton(room);
+  setStatus(room ? `Saved session found for room ${room}. Tap Resume or Switch Room.` : 'Saved session found. Tap Resume or Switch Room.');
 }
 
 // --- BOOT ---
 function boot(){
   initUi();       // wire DOM refs so router/catalog can render the grid
+  const initialCatalog = Array.isArray(state._pendingCatalog) ? state._pendingCatalog : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
+  renderCatalog(initialCatalog);
   bindJoin();
-  wireRouter();   // non-blocking
+  bindResume();
+  bindSessionControls();
   const didReset = maybeResetFromQuery();
   if (!didReset) tryAutoResume();
+  else updateJoinButtonLabel(false);
 }
 document.addEventListener('DOMContentLoaded', boot);
