@@ -1,8 +1,8 @@
 // js/router.js — FULL FILE (patch-aware, blob-safe)
-import { state } from './state.js?v=11.0.6';
-import { renderCatalog } from './features/catalog.js?v=11.0.6';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.6';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.6';
+import { state } from './state.js?v=11.0.10';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.10';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.10';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.10';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -68,6 +68,30 @@ function setDbg(s) {
   if (pill) pill.textContent = `last: ${s}`;
 }
 
+function applyCatalogSnapshot(entries, { force = false } = {}) {
+  const currentCount = Array.isArray(state.catalog?.entries) ? state.catalog.entries.length : 0;
+  if (!force && currentCount && (!entries || !entries.length)) return false;
+  if (!force && currentCount && entries && entries.length && currentCount === entries.length) {
+    const unchanged = entries.every((entry, idx) => {
+      const existing = state.catalog.entries[idx];
+      return existing && String(existing.id) === String(entry.id);
+    });
+    if (unchanged) return false;
+  }
+  ensureLobbyShown();
+  renderCatalog(entries || []);
+  return true;
+}
+
+function tryConsumeCatalog(root, opts = {}) {
+  const entries = extractCatalogEntries(root);
+  if (Array.isArray(entries)) {
+    applyCatalogSnapshot(entries, opts);
+    return true;
+  }
+  return false;
+}
+
 // ---------- main router ----------
 export async function onSocketMessage(msg){
   try {
@@ -104,12 +128,9 @@ export async function onSocketMessage(msg){
       }
 
       case 'CHARACTER_CATALOG': {
-        ensureLobbyShown();
         const p = raw.payload || raw.data || raw;
         const entries = A(p.entries || p.list || p.characters);
-        if (!state.catalog) state.catalog = { entries: [] };
-        state.catalog.entries = entries.slice();
-        renderCatalog(state.catalog.entries);
+        applyCatalogSnapshot(entries, { force: true });
         return;
       }
 
@@ -121,10 +142,8 @@ export async function onSocketMessage(msg){
 
         // 1) Full catalog embedded in body
         if (typed === 'CHARACTER_CATALOG' || Array.isArray(body.entries)) {
-          ensureLobbyShown();
-          if (!state.catalog) state.catalog = { entries: [] };
-          state.catalog.entries = A(body.entries || body.list || body.characters).slice();
-          renderCatalog(state.catalog.entries);
+          const entries = A(body.entries || body.list || body.characters);
+          applyCatalogSnapshot(entries, { force: true });
           return;
         }
 
@@ -136,8 +155,7 @@ export async function onSocketMessage(msg){
             const trip = findPatchTriplet(pack);
             if (trip) applyCatalogPatch(trip);
           }
-          ensureLobbyShown();
-          renderCatalog(state.catalog.entries);
+          applyCatalogSnapshot(state.catalog.entries, { force: true });
           return;
         }
 
@@ -146,10 +164,11 @@ export async function onSocketMessage(msg){
         if (trip) {
           if (!state.catalog) state.catalog = { entries: [] };
           applyCatalogPatch(trip);
-          ensureLobbyShown();
-          renderCatalog(state.catalog.entries);
+          applyCatalogSnapshot(state.catalog.entries, { force: true });
           return;
         }
+
+        if (tryConsumeCatalog(env, { force: false })) return;
 
         return;
       }
@@ -158,17 +177,15 @@ export async function onSocketMessage(msg){
         // Unknowns: try defensive render if entries exist
         const p = raw.payload || raw.data || raw;
         if (p && Array.isArray(p.entries)) {
-          ensureLobbyShown();
-          if (!state.catalog) state.catalog = { entries: [] };
-          state.catalog.entries = p.entries.slice();
-          renderCatalog(state.catalog.entries);
+          applyCatalogSnapshot(p.entries, { force: true });
         } else {
           const trip = findPatchTriplet(raw);
           if (trip) {
             if (!state.catalog) state.catalog = { entries: [] };
             applyCatalogPatch(trip);
-            ensureLobbyShown();
-            renderCatalog(state.catalog.entries);
+            applyCatalogSnapshot(state.catalog.entries, { force: true });
+          } else {
+            tryConsumeCatalog(raw);
           }
         }
         return;
@@ -177,6 +194,9 @@ export async function onSocketMessage(msg){
     console.log('router error:', err);
   }
 }
+
+// Ensure the shared ws layer forwards messages here immediately on module load and for legacy entry points.
+setOnSocketMessage(onSocketMessage);
 
 // Optional: if your ws layer wires events instead of raw strings
 export function onSocketEvent(ev) { return setOnSocketMessage(onSocketMessage); }
