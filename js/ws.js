@@ -80,6 +80,15 @@ function scheduleRehydrate(ms=900){
 
 // connect
 export function connectWs(){
+  const room = String(state.roomId || '').trim();
+  const player = String(state.playerId || '').trim();
+  if (!room || !player) {
+    // Nothing to connect yet — most likely a fresh load that hasn't joined.
+    try { setStatus('Waiting to join…'); } catch {}
+    state.shouldReconnect = false;
+    return;
+  }
+
   try { if (state.ws) { try { state.ws.close(); } catch {} } } catch {}
   const sock = new WebSocket(buildWsUrl());
   state.ws = sock;
@@ -109,10 +118,37 @@ export function connectWs(){
     scheduleRehydrate(300);
   };
 
-  sock.onmessage = (ev) => {
+  sock.onmessage = async (ev) => {
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
-    let msg = null; try { msg = JSON.parse(ev.data); } catch { return; }
-    try { _onSocketMessage(msg); } catch(e) { console.error('router error', e); }
+
+    let payload = ev?.data;
+
+    try {
+      if (payload instanceof Blob) {
+        payload = await payload.text();
+      } else if (payload instanceof ArrayBuffer) {
+        payload = new TextDecoder().decode(payload);
+      }
+
+      if (typeof payload === 'string') {
+        const trimmed = payload.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          try {
+            payload = JSON.parse(trimmed);
+          } catch {
+            payload = trimmed; // fall through to string handling downstream
+          }
+        } else {
+          payload = trimmed;
+        }
+      }
+    } catch (err) {
+      console.warn('ws message decode failed', err);
+      payload = ev?.data ?? null;
+    }
+
+    try { _onSocketMessage(payload); }
+    catch(e) { console.error('router error', e); }
   };
 
   sock.onerror = () => { setStatus('Connection problem'); showToast('Connection problem.'); };
