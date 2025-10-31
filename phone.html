@@ -20,10 +20,15 @@
         <input id="name" placeholder="Your name" value="Player">
         <div class="row" style="margin-top:10px">
           <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
+          <button id="btnResume" class="btn-secondary hidden" type="button">Resume Session</button>
         </div>
       </div>
 
       <div id="status" class="pill">Status: Waiting to join…</div>
+
+      <div class="row" id="sessionControls">
+        <button id="btnReset" class="btn-reset" type="button">Switch Room</button>
+      </div>
 
       <div id="lobbyArea" class="card hidden">
         <div class="row" style="align-items:center;justify-content:space-between">
@@ -57,7 +62,7 @@
       <div id="dbg">last: —</div>
     </div>
 
-    <script type="module" src="./js/main.js?v=11.0.6"></script>
+    <script type="module" src="./js/main.js?v=11.0.8"></script>
   </body>
 </html>
 
