@@ -1,5 +1,4 @@
 // js/ws.js — FULL FILE (watchdog + capped reconnects)
-
 import { state } from './state.js';
 import { WS_URL, backoff } from './config.js';
 import { setPhase, setStatus, setLobbyVisible, setDbg, showToast } from './ui.js';
@@ -68,17 +67,15 @@ export function wsSend(obj){
 // ---- handlers ----
 function attachWsHandlers(sock){
   sock.onopen = () => {
-    state._terminal = false;
-    state.shouldReconnect = true;
-    state.reconnectAttempts = 0;
+    try {
+      sock.send(JSON.stringify({
+        type:'HELLO_PLAYER',
+        roomId: state.roomId,
+        playerId: state.playerId,
+        name: (state.els.nameInput?.value||'').trim() || 'Player'
+      }));
+    } catch {}
 
-    setPhase('lobby');
-    wsSend({
-      type:'HELLO_PLAYER',
-      roomId: state.roomId,
-      playerId: state.playerId,
-      name: (state.els.nameInput?.value||'').trim() || 'Player'
-    });
     setStatus('Connected.', true);
     state.els.joinCard?.classList.add('hidden');
     setLobbyVisible(true);
@@ -103,12 +100,20 @@ function attachWsHandlers(sock){
   };
 
   sock.onmessage = (ev) => {
-    // first message arrived -> cancel watchdog
+    // First actual message clears the watchdog
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
-    _onSocketMessage(ev);
+
+    let msg = null;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    _onSocketMessage(msg);
+  };
+
+  sock.onerror = () => {
+    setStatus('Socket error'); // visible until close fires
   };
 
   sock.onclose = (e) => {
+    try { clearInterval(state.hbInterval); } catch {}
     clearInterval(state.hbInterval);
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
     state.triviaAllowed = null; state.triviaMode = 'PENDING';
@@ -125,33 +130,34 @@ function attachWsHandlers(sock){
       reason.includes('FORBIDDEN') ||
       reason.includes('UNAUTHORIZED');
 
-    if (looksTerminal) { endSession(e.reason || 'Session closed'); return; }
-
-    setDbg('WS closed ' + code + ' ' + (e.reason || ''));
-    if (state.shouldReconnect && state.roomId && state.playerId) {
-      setLobbyVisible(false);
-      state.els.joinCard?.classList.add('hidden');
-      scheduleReconnect('socket closed');
+    if (looksTerminal) {
+      endSession(reason || `Closed (${code})`);
       return;
     }
 
-    // Hard offline / session cleared
-    setStatus('Disconnected');
-    resetToLobbyUi();
+    setStatus(`Disconnected (${code || '—'})`, true);
+    if (state.shouldReconnect) {
+      scheduleReconnect(`close ${code}`);
+    } else {
+      resetToLobbyUi();
+    }
   };
 }
 
-// ---- UI resets / teardown ----
 export function resetToLobbyUi(){
+  setPhase('lobby');
   setLobbyVisible(false);
   state.els.joinCard?.classList.remove('hidden');
-  state.myReady = false; state.myCharId = null; state.takenChars.clear();
-  if (state.els.charGrid) state.els.charGrid.innerHTML = '';
-  // roll overlay / trivia pad hidden by features on next tick
+  state.els.rollBtn?.classList.add('hidden');
 }
 
-export function endSession(reason='Session closed'){
-  state._terminal = true;
+export function endSession(reason='Session ended'){
+  try { state._terminal = true; } catch {}
+  try { clearInterval(state.hbInterval); } catch {}
+  clearInterval(state.hbInterval);
+  if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
+  state.triviaAllowed = null; state.triviaMode = 'PENDING';
+
   state.shouldReconnect = false;
   state.reconnectAttempts = 0;
   try { wsSend({ type:'GOODBYE' }); } catch {}
@@ -162,4 +168,9 @@ export function endSession(reason='Session closed'){
   setPhase('lobby');
   setLobbyVisible(false);
   state.els.joinCard?.classList.remove('hidden');
+}
+
+// expose manual rehydrate for console debugging
+if (typeof window !== 'undefined') {
+  window.dpRehydrate = () => requestRehydrate('manual');
 }
