@@ -1,8 +1,8 @@
 // js/router.js — FULL FILE (patch-aware, blob-safe)
-import { state } from './state.js?v=11.0.6';
-import { renderCatalog } from './features/catalog.js?v=11.0.6';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.6';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.6';
+import { state } from './state.js?v=11.0.7';
+import { renderCatalog } from './features/catalog.js?v=11.0.7';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.7';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.7';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
