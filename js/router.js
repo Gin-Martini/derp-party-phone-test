@@ -46,18 +46,20 @@ const normType = (() => {
 })();
 
 const coalesce = (obj, ...keys) => {
+  if (!obj || typeof obj !== 'object') return undefined;
   for (const k of keys) {
-    if (obj && Object.prototype.hasOwnProperty.call(obj, k) && obj[k] != null) return obj[k];
+    if (obj[k] !== undefined) return obj[k];
   }
   return undefined;
 };
 
-const toIdList = (v) => {
+const toIdList = v => {
   if (v == null) return [];
-  if (Array.isArray(v)) return v.flatMap(toIdList).map(x => String(x)).filter(Boolean);
+  if (Array.isArray(v)) return v.map(x => String(x));
   if (typeof v === 'object') {
+    // map: { id: true } or { id: 1 }
     const keys = Object.keys(v);
-    if (keys.length && keys.every(k => typeof v[k] === 'boolean')) {
+    if (keys.length && typeof v[keys[0]] === 'boolean') {
       return keys.filter(k => v[k]).map(String);
     }
     return keys.flatMap(k => toIdList(v[k]));
@@ -111,8 +113,9 @@ export function onSocketMessage(ev) {
       return;
     }
 
+    // ===== HELLO / JOINED =====
     case 'HELLO_OK': {
-      const pid = payload.playerId || payload.id;
+      const pid = payload.playerId || payload.pid || payload.player;
       const rid = payload.roomId || payload.room;
       if (pid) state.playerId = String(pid);
       if (rid) state.roomId = String(rid);
@@ -132,16 +135,27 @@ export function onSocketMessage(ev) {
       return;
     }
 
-    case 'LOBBY_OPEN': {
-      ensureLobbyShown();
-      setStatus('Lobby open — pick a character, then Ready.');
-      enableReadyButton(!!state.myCharId);
+    case 'CHARACTER_TAKEN': {
+      const tidMany = coalesce(payload, 'taken', 'takenIds', 'ids');
+      const tidOne  = coalesce(payload, 'charId', 'characterId', 'id');
+      let next = new Set(state.takenChars);
+      if (tidMany != null) toIdList(tidMany).forEach(id => next.add(String(id)));
+      if (tidOne  != null) next.add(String(tidOne));
+      // don't mark my current selection as taken for me
+      next.delete(state.myCharId || '');
+      applyTaken([...next]);
       return;
     }
 
-    case 'LOBBY_CLOSED': {
-      setStatus('Lobby closed — waiting…');
-      enableReadyButton(false);
+    case 'CHARACTER_SELECT': {
+      const pid = coalesce(payload, 'playerId', 'pid', 'player');
+      const pname = coalesce(payload, 'playerName', 'name');
+      const charId = coalesce(payload, 'charId', 'characterId', 'id', 'char');
+      if (charId != null && isMeFrom(pid, pname)) {
+        state.myCharId = String(charId);
+        markSelected(state.myCharId);
+        enableReadyButton(true);
+      }
       return;
     }
 
@@ -160,16 +174,7 @@ export function onSocketMessage(ev) {
         enableReadyButton(true);
       }
 
-      // Ready state (mine)
-      const readyMap = coalesce(payload, 'readyPlayers', 'readyMap', 'readyByPlayer');
-      if (readyMap && typeof readyMap === 'object' && state.playerId) {
-        const mine = !!readyMap[state.playerId] || !!readyMap[String(state.playerId)];
-        setReadyUI(!!mine);
-      }
-      if (payload.ready === true  && isMeFrom(selPid, selName)) setReadyUI(true);
-      if (payload.ready === false && isMeFrom(selPid, selName)) setReadyUI(false);
-
-      // Trivia pad gating (quiet refresh)
+      // Trivia gate (allow/block)
       showTriviaPadIfAllowed(payload, { quiet: true });
 
       // If a catalog is present in STATE, render it here.
@@ -186,31 +191,6 @@ export function onSocketMessage(ev) {
       return;
     }
 
-    // ===== CHARACTER EVENTS =====
-    case 'CHARACTER_SELECT': {
-      const pid = coalesce(payload, 'playerId', 'pid', 'player');
-      const pname = coalesce(payload, 'playerName', 'name');
-      const cid = coalesce(payload, 'charId', 'characterId', 'char', 'id');
-      if (cid != null && isMeFrom(pid, pname)) {
-        state.myCharId = String(cid);
-        markSelected(state.myCharId);
-        enableReadyButton(true);
-        setDbg('my select=' + state.myCharId);
-      }
-      return;
-    }
-
-    case 'CHARACTER_TAKEN': {
-      const tidOne  = coalesce(payload, 'charId', 'characterId', 'id');
-      const tidMany = coalesce(payload, 'taken', 'takenIds', 'takenChars', 'selected', 'selectedIds');
-      let next = new Set(state.takenChars);
-      if (tidMany != null) toIdList(tidMany).forEach(id => next.add(String(id)));
-      if (tidOne  != null) next.add(String(tidOne));
-      next.delete(state.myCharId || '');
-      applyTaken([...next]);
-      return;
-    }
-
     // ===== READY =====
     case 'READY': {
       const pid = coalesce(payload, 'playerId', 'pid', 'player');
@@ -218,6 +198,7 @@ export function onSocketMessage(ev) {
       if (isMeFrom(pid, pname)) setReadyUI(true);
       return;
     }
+
     case 'UNREADY': {
       const pid = coalesce(payload, 'playerId', 'pid', 'player');
       const pname = coalesce(payload, 'playerName', 'name');
@@ -225,50 +206,65 @@ export function onSocketMessage(ev) {
       return;
     }
 
-    // ===== TURN ORDER / ROLL =====
+    // ===== LOBBY OPEN/CLOSE =====
+    case 'LOBBY_OPEN': {
+      ensureLobbyShown();
+      setStatus('Lobby open.');
+      return;
+    }
+    case 'LOBBY_CLOSED': {
+      setPhase('closed');
+      setLobbyVisible(false);
+      setStatus('Lobby closed.');
+      return;
+    }
+
+    // ===== TURN ORDER / ROLL FLOW =====
     case 'TURN_ORDER_START': {
-      setPhase('turn_order');
-      state.inTurnOrder = true;
-      state.myHasRolled = false;
-      showRollOverlay('Turn Order');
-      updateRollUI();
-      setStatus('Rolling for turn order…');
+      setPhase('roll');
+      showRollOverlay();
+      updateRollUI({ phase: 'start', players: payload.players || [] });
       return;
     }
 
     case 'PLAYER_ROLL': {
+      const who = coalesce(payload, 'playerId', 'pid', 'player');
+      const val = coalesce(payload, 'value', 'roll', 'result');
+      updateRollUI({ phase: 'rolling', who, val });
       return;
     }
 
-    case 'ROLL_RESULT': {
-      const v = coalesce(payload, 'value', 'v', 'roll', 'result');
-      if (v != null && state.els.rollValue) state.els.rollValue.textContent = String(v);
-      const done = !!payload.done;
-      if (done && state.els.rollState) {
-        state.els.rollState.textContent = 'Done';
-        state.els.rollState.classList.remove('no'); state.els.rollState.classList.add('ok');
-      }
-      updateRollUI();
+    case 'ROLL_RESULT':
+    case 'TURN_ORDER_RESULT':
+    case 'ROLL': {
+      const order = coalesce(payload, 'order', 'turnOrder', 'players') || [];
+      updateRollUI({ phase: 'result', order });
+      // lobby UI stays hidden during roll overlay
       return;
     }
 
-    case 'TURN_ORDER_RESULT': {
-      state.inTurnOrder = false;
-      state.myHasRolled = true;
-      if (state.els.orderResult) {
-        state.els.orderResult.classList.remove('hidden');
-        state.els.orderResult.textContent = payload.text || payload.order || 'Order set.';
-      }
-      updateRollUI();
+    // ===== TRIVIA =====
+    case 'TRIVIA_ALLOWED': {
+      state.triviaAllowed = true;
+      showTriviaPadIfAllowed(payload);
       return;
     }
-
-    // ===== TRIVIA (PAD GATING ONLY ON PHONE) =====
-    case 'TRIVIA_START':
-    case 'TRIVIA_SWITCH':
-    case 'TRIVIA_ALLOWED':
-    case 'TRIVIA_BLOCKED':
+    case 'TRIVIA_BLOCKED': {
+      state.triviaAllowed = false;
+      showTriviaPadIfAllowed(payload); // closes if open
+      return;
+    }
+    case 'TRIVIA_START': {
+      state.triviaAllowed = true;
+      showTriviaPadIfAllowed(payload);
+      return;
+    }
+    case 'TRIVIA_SWITCH': {
+      showTriviaPadIfAllowed(payload);
+      return;
+    }
     case 'TRIVIA_END': {
+      state.triviaAllowed = false;
       showTriviaPadIfAllowed(payload);
       return;
     }
@@ -278,4 +274,33 @@ export function onSocketMessage(ev) {
       return;
     }
   }
+}
+
+// --- outbound helpers (UI -> host) ---
+export function sendReady(flag) {
+  wsSend({ type: flag ? 'READY' : 'UNREADY' });
+}
+
+export function requestCatalog() {
+  wsSend({ type: 'CATALOG' });
+}
+
+export function selectCharacter(charId) {
+  if (!charId) return;
+  wsSend({ type: 'CHARACTER_SELECT', charId: String(charId) });
+}
+
+export function requestRehydrate() {
+  wsSend({ type: 'STATE' });
+}
+
+// --- roll overlay interop (optional) ---
+export function notifyRollUIVisible(v) {
+  if (v != null && state.els.rollPanel) {
+    state.els.rollPanel.style.display = v ? '' : 'none';
+  }
+}
+
+export function setRollValueText(v) {
+  if (v != null && state.els.rollValue) state.els.rollValue.textContent = String(v);
 }
