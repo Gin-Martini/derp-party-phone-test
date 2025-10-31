@@ -1,8 +1,8 @@
 // js/router.js — FULL FILE (patch-aware, blob-safe)
-import { state } from './state.js?v=11.0.10';
-import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.10';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.10';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.10';
+import { state } from './state.js?v=11.0.12';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -70,16 +70,26 @@ function setDbg(s) {
 
 function applyCatalogSnapshot(entries, { force = false } = {}) {
   const currentCount = Array.isArray(state.catalog?.entries) ? state.catalog.entries.length : 0;
-  if (!force && currentCount && (!entries || !entries.length)) return false;
-  if (!force && currentCount && entries && entries.length && currentCount === entries.length) {
-    const unchanged = entries.every((entry, idx) => {
+  const explicit = entries !== undefined && entries !== null;
+  const nextList = Array.isArray(entries) ? entries : [];
+
+  if (!force && currentCount && !explicit) return false;
+
+  if (!force && currentCount && nextList.length === 0 && explicit) {
+    ensureLobbyShown();
+    renderCatalog([]);
+    return true;
+  }
+
+  if (!force && currentCount && nextList.length && currentCount === nextList.length) {
+    const unchanged = nextList.every((entry, idx) => {
       const existing = state.catalog.entries[idx];
       return existing && String(existing.id) === String(entry.id);
     });
     if (unchanged) return false;
   }
   ensureLobbyShown();
-  renderCatalog(entries || []);
+  renderCatalog(nextList);
   return true;
 }
 
@@ -129,7 +139,17 @@ export async function onSocketMessage(msg){
 
       case 'CHARACTER_CATALOG': {
         const p = raw.payload || raw.data || raw;
-        const entries = A(p.entries || p.list || p.characters);
+        let entries = Array.isArray(p.entries)
+          ? p.entries
+          : Array.isArray(p.list)
+            ? p.list
+            : Array.isArray(p.characters)
+              ? p.characters
+              : [];
+        if (!entries.length) {
+          const fallback = extractCatalogEntries(p);
+          if (Array.isArray(fallback)) entries = fallback;
+        }
         applyCatalogSnapshot(entries, { force: true });
         return;
       }
@@ -142,7 +162,17 @@ export async function onSocketMessage(msg){
 
         // 1) Full catalog embedded in body
         if (typed === 'CHARACTER_CATALOG' || Array.isArray(body.entries)) {
-          const entries = A(body.entries || body.list || body.characters);
+          let entries = Array.isArray(body.entries)
+            ? body.entries
+            : Array.isArray(body.list)
+              ? body.list
+              : Array.isArray(body.characters)
+                ? body.characters
+                : [];
+          if (!entries.length) {
+            const fallback = extractCatalogEntries(body);
+            if (Array.isArray(fallback)) entries = fallback;
+          }
           applyCatalogSnapshot(entries, { force: true });
           return;
         }

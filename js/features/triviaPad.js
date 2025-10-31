@@ -1,5 +1,5 @@
-import { state } from '../state.js?v=11.0.10';
-import { showToast, idsEqual } from '../ui.js?v=11.0.10';
+import { state } from '../state.js?v=11.0.12';
+import { showToast, idsEqual } from '../ui.js?v=11.0.12';
 
 // === Hints detection ===
 export function hasTriviaHints(payload) {
@@ -109,8 +109,8 @@ export function computeTriviaEligibility(payload){
 }
 
 // === Pad UI ===
-import { showRollOverlay, hideRollOverlay, updateRollUI } from './rollOverlay.js?v=11.0.10';
-import { wsSend } from '../ws.js?v=11.0.10';
+import { showRollOverlay, hideRollOverlay, updateRollUI } from './rollOverlay.js?v=11.0.12';
+import { wsSend } from '../ws.js?v=11.0.12';
 
 export function ensureTriviaPad(){
   if (state.triviaPadEl) return state.triviaPadEl;

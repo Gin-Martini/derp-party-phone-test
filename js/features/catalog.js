@@ -1,6 +1,7 @@
 // js/features/catalog.js — FULL FILE (adds empty-state hint + deep extract helper)
-import { state } from '../state.js?v=11.0.10';
-import { setDbg, resolvePortraitSrc } from '../ui.js?v=11.0.10';
+import { state } from '../state.js?v=11.0.12';
+import { setDbg, resolvePortraitSrc, showToast, enableReadyButton } from '../ui.js?v=11.0.12';
+import { wsSend } from '../ws.js?v=11.0.12';
 
 const ID_KEYS = ['id', 'characterId', 'key', 'slug', 'code'];
 const LOOKS_LIKE_ENTRY_KEYS = ['label', 'name', 'title', 'portrait', 'portraitUrl', 'portraitData', 'imageUrl'];
@@ -59,15 +60,15 @@ export function extractCatalogEntries(root, guardLimit = 4000) {
     // direct property hits first
     if (Array.isArray(node.entries)) {
       const out = tryArrayAsCatalog(node.entries, { allowEmpty: true });
-      if (out) return out;
+      if (out !== null) return out;
     }
     if (Array.isArray(node.characters)) {
       const out = tryArrayAsCatalog(node.characters, { allowEmpty: true });
-      if (out) return out;
+      if (out !== null) return out;
     }
     if (Array.isArray(node.catalog)) {
       const out = tryArrayAsCatalog(node.catalog, { allowEmpty: true });
-      if (out) return out;
+      if (out !== null) return out;
     }
     if (Array.isArray(node.list)) {
       const out = tryArrayAsCatalog(node.list, { allowEmpty: false });
@@ -82,6 +83,51 @@ export function extractCatalogEntries(root, guardLimit = 4000) {
   return null;
 }
 
+function attachCatalogHandlers(){
+  const grid = state.els.charGrid;
+  if (!grid || grid._dpCatalogBound) return;
+
+  const onClick = (ev) => {
+    const btn = ev.target?.closest?.('.charBtn');
+    if (!btn) return;
+    ev.preventDefault?.();
+    const charId = btn.dataset?.charId;
+    if (!charId) return;
+    if (btn.classList.contains('taken')) {
+      showToast?.('That character is already taken.');
+      return;
+    }
+    selectCharacter(charId, btn);
+  };
+
+  grid.addEventListener('click', onClick, { passive: false });
+  grid._dpCatalogBound = true;
+}
+
+function selectCharacter(charId, btn){
+  const cleanId = String(charId || '').trim();
+  if (!cleanId) return;
+
+  const label = btn?.querySelector?.('.name')?.textContent?.trim() || cleanId;
+  state.myCharId = cleanId;
+  markSelected(cleanId);
+  enableReadyButton(true);
+  setDbg(`pick:${cleanId}`);
+
+  const base = {
+    roomId: state.roomId || undefined,
+    playerId: state.playerId || undefined,
+    characterId: cleanId,
+    value: cleanId,
+    id: cleanId,
+    label
+  };
+
+  try { wsSend({ type: 'INTENT', intent: 'CHARACTER_SELECT', ...base }); } catch {}
+  try { wsSend({ type: 'CHARACTER_SELECT', ...base }); } catch {}
+  try { wsSend({ type: 'SELECT_CHARACTER', ...base }); } catch {}
+}
+
 export function renderCatalog(entries) {
   const list = normalizeEntries(entries);
 
@@ -91,6 +137,8 @@ export function renderCatalog(entries) {
 
   const grid = state.els.charGrid;
   if (!grid) return;
+
+  attachCatalogHandlers();
 
   // Once the grid is available we can flush any pending catalog into it.
   state._pendingCatalog = null;
@@ -108,7 +156,7 @@ export function renderCatalog(entries) {
 
   list.forEach((e, idx) => {
     const id    = String(e.id ?? idx);
-    const label = e.label || e.id || ('Char ' + (idx + 1));
+    const label = e.label || e.name || e.title || e.id || ('Char ' + (idx + 1));
     const src   = resolvePortraitSrc({
       url:  e.portraitUrl || e.imageUrl || e.url || '',
       data: e.portraitData || e.portrait || ''
