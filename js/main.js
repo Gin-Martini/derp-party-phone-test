@@ -1,8 +1,8 @@
-// js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust module imports)
-import * as WS from './ws.js?v=11.0.2';
-import { state } from './state.js?v=11.0.2';
-import { initUi } from './ui.js?v=11.0.2';
-import { HTTP_BASE, SESSION_KEY } from './config.js';
+// js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
+import * as WS from './ws.js?v=11.0.4';
+import { state } from './state.js?v=11.0.4';
+import { initUi } from './ui.js?v=11.0.4';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.4';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -78,7 +78,7 @@ function bindJoin(){
 // --- Optional router wiring (cache-busted import) ---
 async function wireRouter(){
   try {
-    const mod = await import('./router.js?v=11.0.2');
+    const mod = await import('./router.js?v=11.0.4');
     if (mod?.onSocketMessage && typeof WS.setOnSocketMessage === 'function') {
       WS.setOnSocketMessage(mod.onSocketMessage);
     }
