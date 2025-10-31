@@ -4,6 +4,22 @@ import { setPhase, setStatus, setLobbyVisible, showToast, resetToLobbyUi } from 
 import { saveSession, clearSession } from './session.js?v=11.0.5';
 import { TERMINAL_CLOSE_CODES } from './config.js?v=11.0.5';
 
+const TERMINAL_CLOSE_REASON_PATTERNS = [
+  /room\s+(closed|missing|not\s+found|expired)/i,
+  /(session|player)\s+(expired|missing|unknown)/i,
+  /rejoin\s+required/i,
+  /forbidden/i
+];
+
+function isTerminalClose(ev){
+  const code = Number(ev?.code) || 0;
+  if (code && TERMINAL_CLOSE_CODES?.has?.(code)) return true;
+  if (code >= 4400) return true; // policy / auth class codes from relay
+  const reason = (ev?.reason || '').trim();
+  if (!reason) return false;
+  return TERMINAL_CLOSE_REASON_PATTERNS.some((re) => re.test(reason));
+}
+
 // message router hook (set by router.js)
 let _onSocketMessage = () => {};
 export function setOnSocketMessage(fn){ _onSocketMessage = fn || (()=>{}); }
@@ -102,12 +118,13 @@ export function connectWs(){
   sock.onerror = () => { setStatus('Connection problem'); showToast('Connection problem.'); };
 
   sock.onclose = (ev) => {
-    const code = ev?.code;
-    if (TERMINAL_CLOSE_CODES?.has?.(code)) {
+    const code = Number(ev?.code) || 0;
+    if (isTerminalClose(ev)) {
+      const fallback = code ? `Room closed (${code}). Re-enter code.` : 'Room closed. Re-enter code.';
+      const msg = (ev?.reason || '').trim() || fallback;
       endSession('Room closed');
       clearSession();
       resetToLobbyUi();
-      const msg = ev?.reason?.trim() || 'Room closed. Re-enter code.';
       setStatus(msg);
       showToast(msg);
       return;
