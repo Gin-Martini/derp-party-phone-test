@@ -1,5 +1,5 @@
-import { state } from '../state.js';
-import { showToast } from '../ui.js';
+import { state } from '../state.js?v=11.0.5';
+import { showToast } from '../ui.js?v=11.0.5';
 
 // === Hints detection ===
 export function hasTriviaHints(payload) {
@@ -18,7 +18,7 @@ export function hasTriviaHints(payload) {
 }
 
 // === Eligibility (logic preserved) ===
-import { idsEqual } from '../ui.js';
+import { idsEqual } from '../ui.js?v=11.0.5';
 export function computeTriviaEligibility(payload){
   if (!payload || typeof payload !== 'object') { state.triviaMode = 'PENDING'; return false; }
   if (!hasTriviaHints(payload)) { state.triviaMode = 'PENDING'; return null; }

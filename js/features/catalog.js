@@ -1,6 +1,6 @@
 // js/features/catalog.js — FULL FILE (adds empty-state hint)
-import { state } from '../state.js';
-import { setDbg, resolvePortraitSrc } from '../ui.js';
+import { state } from '../state.js?v=11.0.5';
+import { setDbg, resolvePortraitSrc } from '../ui.js?v=11.0.5';
 
 export function renderCatalog(entries) {
   const grid = state.els.charGrid;

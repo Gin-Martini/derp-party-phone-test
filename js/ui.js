@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state } from './state.js?v=11.0.5';
 
 // DOM helpers + visual utilities (status, toast, log, etc.)
 export function initUi() {
@@ -25,6 +25,51 @@ export function initUi() {
 
   // remove any legacy dev button
   (document.getElementById('btnShowRoll') || { remove:()=>{} }).remove();
+}
+
+export function hideJoinCard(){ state.els.joinCard?.classList.add('hidden'); }
+export function showJoinCard(){ state.els.joinCard?.classList.remove('hidden'); }
+
+export function resetToLobbyUi(){
+  setPhase('lobby');
+  state.roomId = '';
+  state.playerId = '';
+  state.playerNameById?.clear?.();
+
+  showJoinCard();
+  setLobbyVisible(false);
+
+  state.myCharId = null;
+  state.takenChars?.clear?.();
+  setReadyUI(false);
+
+  const grid = state.els.charGrid;
+  if (grid) grid.replaceChildren();
+
+  state.inTurnOrder = false;
+  state.canRollNow = false;
+  state.myHasRolled = false;
+
+  if (state.els.rollPanel) state.els.rollPanel.classList.add('hidden');
+  if (state.els.rollValue) state.els.rollValue.textContent = '—';
+  if (state.els.rollState) {
+    state.els.rollState.textContent = 'Waiting…';
+    state.els.rollState.classList.add('no');
+    state.els.rollState.classList.remove('ok');
+  }
+  if (state.els.rollBtn) {
+    state.els.rollBtn.disabled = false;
+    state.els.rollBtn.classList.remove('btn-disabled');
+  }
+  if (state.els.orderResult) {
+    state.els.orderResult.textContent = '';
+    state.els.orderResult.classList.add('hidden');
+  }
+
+  state.triviaAllowed = null;
+  state.triviaMode = 'PENDING';
+  state.triviaPadEl = null;
+  state.triviaPadButtons = [];
 }
 
 export function setPhase(p){ state.phase = p; setDbg('phase=' + p); }

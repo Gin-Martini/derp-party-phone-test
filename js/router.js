@@ -1,8 +1,8 @@
 // js/router.js — FULL FILE (patch-aware, blob-safe)
-import { state } from './state.js';
-import { renderCatalog } from './features/catalog.js';
-import { setStatus, setLobbyVisible, setPhase } from './ui.js';
-import { wsSend, setOnSocketMessage } from './ws.js';
+import { state } from './state.js?v=11.0.5';
+import { renderCatalog } from './features/catalog.js?v=11.0.5';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.5';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.5';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -95,6 +95,7 @@ export async function onSocketMessage(msg){
     switch (type) {
       case 'HELLO': {
         setStatus('Connected. Waiting for host...');
+        hideJoinCard();
         ensureLobbyShown();
         // Ask host to rehydrate us
         wsSend && wsSend({ type: 'REQUEST_SNAPSHOT' });
