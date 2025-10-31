@@ -15,6 +15,8 @@ export const state = {
   playerNameById: new Map(),
 
   // lobby/char select
+  catalog: null,
+  _pendingCatalog: null,
   myReady: false,
   myCharId: null,
   takenChars: new Set(),
