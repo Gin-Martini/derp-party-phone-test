@@ -2,6 +2,7 @@
 import { state } from './state.js?v=11.0.5';
 import { setPhase, setStatus, setLobbyVisible, showToast, resetToLobbyUi } from './ui.js?v=11.0.5';
 import { saveSession, clearSession } from './session.js?v=11.0.5';
+import { TERMINAL_CLOSE_CODES } from './config.js?v=11.0.5';
 
 // message router hook (set by router.js)
 let _onSocketMessage = () => {};
@@ -100,7 +101,22 @@ export function connectWs(){
 
   sock.onerror = () => { setStatus('Connection problem'); showToast('Connection problem.'); };
 
-  sock.onclose = () => { if (state.shouldReconnect) scheduleReconnect('socket closed'); };
+  sock.onclose = (ev) => {
+    const code = ev?.code;
+    if (TERMINAL_CLOSE_CODES?.has?.(code)) {
+      endSession('Room closed');
+      clearSession();
+      resetToLobbyUi();
+      const msg = ev?.reason?.trim() || 'Room closed. Re-enter code.';
+      setStatus(msg);
+      showToast(msg);
+      return;
+    }
+    if (state.shouldReconnect) {
+      const label = code ? `socket closed (${code})` : 'socket closed';
+      scheduleReconnect(label);
+    }
+  };
 }
 
 // teardown used by scheduleReconnect
