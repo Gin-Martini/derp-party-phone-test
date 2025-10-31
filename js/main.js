@@ -1,7 +1,7 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
 import * as WS from './ws.js?v=11.0.6';
 import { state } from './state.js?v=11.0.6';
-import { initUi, hideJoinCard } from './ui.js?v=11.0.6';
+import { initUi, hideJoinCard, resetToLobbyUi } from './ui.js?v=11.0.6';
 import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.6';
 
 // Minimal status helpers (works even if ui wiring hiccups)
@@ -74,6 +74,25 @@ function bindJoin(){
   const fire = (e)=>onJoinClicked(e);
   ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
   $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
+}
+
+function onResetClicked(e){
+  e?.preventDefault?.();
+  WS.cancelReconnect?.();
+  try { state.ws?.close?.(); } catch {}
+  state.shouldReconnect = false;
+  state.roomId = '';
+  state.playerId = '';
+  clearStoredSession();
+  resetToLobbyUi();
+  setStatus('Waiting to join…');
+  toast('Session cleared. Enter room code.');
+}
+
+function bindSessionControls(){
+  const btn = $('#btnReset'); if (!btn) return;
+  const fire = (e)=>onResetClicked(e);
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
 }
 
 // --- Optional router wiring (cache-busted import) ---
@@ -149,6 +168,7 @@ function tryAutoResume(){
 function boot(){
   initUi();       // wire DOM refs so router/catalog can render the grid
   bindJoin();
+  bindSessionControls();
   wireRouter();   // non-blocking
   const didReset = maybeResetFromQuery();
   if (!didReset) tryAutoResume();
