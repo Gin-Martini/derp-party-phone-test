@@ -1,8 +1,10 @@
-// js/main.js — phone bootstrap (robust join; optional router)
-import * as WS from './ws.js';
-import { HTTP_BASE } from './config.js';
+// js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust module imports)
+import * as WS from './ws.js?v=11.0.2';
+import { state } from './state.js?v=11.0.2';
+import { initUi } from './ui.js?v=11.0.2';
+import { HTTP_BASE, SESSION_KEY } from './config.js';
 
-// Minimal status helpers (work even if ui.js/state.js are broken)
+// Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
 function setStatus(s, busy=false){
   const el = $('#status');
@@ -11,14 +13,13 @@ function setStatus(s, busy=false){
 }
 function toast(msg){
   const t = $('#toast'); if (!t) { alert(msg); return; }
-  t.textContent = msg; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'), 1500);
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._to); toast._to = setTimeout(()=>t.style.display='none', 1500);
 }
 
 // --- JOIN FLOW ---
 async function onJoinClicked(e){
   e?.preventDefault?.();
-
   WS.cancelReconnect?.();
 
   const room = String($('#room')?.value || '').trim().toUpperCase();
@@ -45,15 +46,18 @@ async function onJoinClicked(e){
     }
     const j = await resp.json().catch(()=>({}));
     const playerId = j.playerId || j.id || '';
-    if (!playerId){
-      setStatus('Join failed (no playerId)'); toast('Bad server response.'); return;
-    }
+    if (!playerId){ setStatus('Join failed (no playerId)'); toast('Bad server response.'); return; }
 
-    // persist minimal session so reconnect works (no dependency on session.js)
-    try { localStorage.setItem('dp.session', JSON.stringify({ roomId: room, playerId, name })); } catch {}
+    // >>> CRITICAL: set state before opening WS <<<
+    state.roomId = room;
+    state.playerId = String(playerId);
+    state.shouldReconnect = true;
+
+    // Persist (use canonical v2 key so reconnects work across pages)
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId: room, playerId, name })); } catch {}
 
     setStatus('Joined. Connecting…', true);
-    WS.connectWs?.(); // triggers HELLO on open
+    WS.connectWs?.(); // triggers HELLO on open using state.roomId/playerId
   } catch (err){
     console.log('HTTP error:', err);
     setStatus('HTTP error'); toast('Network error while joining.');
@@ -61,48 +65,49 @@ async function onJoinClicked(e){
     btn?.classList?.remove('btn-disabled'); if (btn) btn.disabled = false;
   }
 }
-window._JOIN = onJoinClicked; // hard fallback (optional)
+window._JOIN = onJoinClicked; // debug helper
 
 // --- UI BINDINGS ---
 function bindJoin(){
-  const btn = $('#btnJoin');
-  if (!btn) return;
+  const btn = $('#btnJoin'); if (!btn) return;
   const fire = (e)=>onJoinClicked(e);
-  // multiple events = reliable on mobile
   ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
-  // Enter in room field
   $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
 }
 
-// --- OPTIONAL: wire router safely (won’t block joins if missing) ---
+// --- Optional router wiring (cache-busted import) ---
 async function wireRouter(){
   try {
-    const mod = await import('./router.js?v=11.0.1');
+    const mod = await import('./router.js?v=11.0.2');
     if (mod?.onSocketMessage && typeof WS.setOnSocketMessage === 'function') {
       WS.setOnSocketMessage(mod.onSocketMessage);
     }
-  } catch (e) {
-    console.warn('router optional:', e?.message || e);
-  }
+  } catch (e) { console.warn('router optional:', e?.message || e); }
 }
 
-// --- AUTO-RESUME (safe/local) ---
-function tryAutoResume(){
+// --- AUTO-RESUME (supports old and new keys) ---
+function loadStoredSession(){
   try {
-    const raw = localStorage.getItem('dp.session');
-    if (!raw) return;
-    const s = JSON.parse(raw);
-    if (!s?.roomId || !s?.playerId) return;
-    $('#name') && ($('#name').value = s.name || 'Player');
-    setStatus('Reconnecting…', true);
-    WS.connectWs?.();
-  } catch {}
+    const raw = localStorage.getItem(SESSION_KEY) || localStorage.getItem('dp.session');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function tryAutoResume(){
+  const s = loadStoredSession();
+  if (!s?.roomId || !s?.playerId) return;
+  $('#name') && ($('#name').value = s.name || 'Player');
+  state.roomId = String(s.roomId).trim().toUpperCase();
+  state.playerId = String(s.playerId).trim();
+  state.shouldReconnect = true;
+  setStatus('Reconnecting…', true);
+  WS.connectWs?.();
 }
 
 // --- BOOT ---
 function boot(){
+  initUi();       // wire DOM refs so router/catalog can render the grid
   bindJoin();
-  wireRouter();    // non-blocking
-  tryAutoResume(); // if a session exists
+  wireRouter();   // non-blocking
+  tryAutoResume();
 }
 document.addEventListener('DOMContentLoaded', boot);
