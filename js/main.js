@@ -1,10 +1,10 @@
 // js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
-import * as WS from './ws.js?v=11.0.10';
-import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.10';
-import { state } from './state.js?v=11.0.10';
-import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.10';
-import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.10';
-import { onSocketMessage } from './router.js?v=11.0.10';
+import * as WS from './ws.js?v=11.0.11';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.11';
+import { state } from './state.js?v=11.0.11';
+import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.11';
+import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.11';
+import { onSocketMessage } from './router.js?v=11.0.11';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);

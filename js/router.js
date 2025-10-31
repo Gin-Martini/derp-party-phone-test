@@ -1,8 +1,8 @@
 // js/router.js — FULL FILE (patch-aware, blob-safe)
-import { state } from './state.js?v=11.0.10';
-import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.10';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.10';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.10';
+import { state } from './state.js?v=11.0.11';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.11';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.11';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.11';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -129,7 +129,17 @@ export async function onSocketMessage(msg){
 
       case 'CHARACTER_CATALOG': {
         const p = raw.payload || raw.data || raw;
-        const entries = A(p.entries || p.list || p.characters);
+        let entries = Array.isArray(p.entries)
+          ? p.entries
+          : Array.isArray(p.list)
+            ? p.list
+            : Array.isArray(p.characters)
+              ? p.characters
+              : [];
+        if (!entries.length) {
+          const fallback = extractCatalogEntries(p);
+          if (Array.isArray(fallback)) entries = fallback;
+        }
         applyCatalogSnapshot(entries, { force: true });
         return;
       }
@@ -142,7 +152,17 @@ export async function onSocketMessage(msg){
 
         // 1) Full catalog embedded in body
         if (typed === 'CHARACTER_CATALOG' || Array.isArray(body.entries)) {
-          const entries = A(body.entries || body.list || body.characters);
+          let entries = Array.isArray(body.entries)
+            ? body.entries
+            : Array.isArray(body.list)
+              ? body.list
+              : Array.isArray(body.characters)
+                ? body.characters
+                : [];
+          if (!entries.length) {
+            const fallback = extractCatalogEntries(body);
+            if (Array.isArray(fallback)) entries = fallback;
+          }
           applyCatalogSnapshot(entries, { force: true });
           return;
         }

@@ -1,6 +1,6 @@
 // js/features/catalog.js — FULL FILE (adds empty-state hint + deep extract helper)
-import { state } from '../state.js?v=11.0.10';
-import { setDbg, resolvePortraitSrc } from '../ui.js?v=11.0.10';
+import { state } from '../state.js?v=11.0.11';
+import { setDbg, resolvePortraitSrc } from '../ui.js?v=11.0.11';
 
 const ID_KEYS = ['id', 'characterId', 'key', 'slug', 'code'];
 const LOOKS_LIKE_ENTRY_KEYS = ['label', 'name', 'title', 'portrait', 'portraitUrl', 'portraitData', 'imageUrl'];
