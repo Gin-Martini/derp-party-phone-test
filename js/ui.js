@@ -1,4 +1,4 @@
-import { state } from './state.js?v=11.0.6';
+import { state } from './state.js?v=11.0.12';
 
 // DOM helpers + visual utilities (status, toast, log, etc.)
 export function initUi() {
@@ -38,6 +38,9 @@ export function resetToLobbyUi(){
 
   showJoinCard();
   setLobbyVisible(false);
+
+  state.catalog = null;
+  state._pendingCatalog = null;
 
   state.myCharId = null;
   state.takenChars?.clear?.();
