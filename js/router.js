@@ -2,8 +2,7 @@
 import { state } from './state.js';
 import { renderCatalog } from './features/catalog.js';
 import { setStatus, setLobbyVisible, setPhase } from './ui.js';
-import { wsSend } from './ws.js';
-
+import { wsSend, setOnSocketMessage } from './ws.js';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -70,7 +69,7 @@ function setDbg(s) {
 }
 
 // ---------- main router ----------
-export async function onSocketMessage(msg) {
+export function onSocketMessage(msg){
   try {
     // Accept raw string, already-parsed object, or Event with .data (Blob/ArrayBuffer/String)
     let raw = msg;
@@ -179,4 +178,4 @@ export async function onSocketMessage(msg) {
 }
 
 // Optional: if your ws layer wires events instead of raw strings
-export function onSocketEvent(ev) { return onSocketMessage(ev); }
+export function onSocketEvent(ev) { return setOnSocketMessage(onSocketMessage); }
