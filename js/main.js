@@ -2,11 +2,11 @@
 import { state } from './state.js?v=11.0.1';
 import { initUi, setStatus, showToast, enableReadyButton, setReadyUI, setDbg } from './ui.js?v=11.0.1';
 import { saveSession, loadSession, clearSession } from './session.js';
-import { connectWs, scheduleReconnect, cancelReconnect, wsSend, endSession, resetToLobbyUi } from './ws.js';
+import { connectWs, scheduleReconnect, cancelReconnect, wsSend, endSession, resetToLobbyUi, setOnSocketMessage } from './ws.js';
 import { renderCatalog } from './features/catalog.js?v=11.0.1';
 import { updateRollUI, showRollOverlay } from './features/rollOverlay.js?v=11.0.1';
 import { HTTP_BASE } from './config.js';
-
+import { onSocketMessage as routerOnMessage } from './router.js?v=11.0.1';
 
 // ==== Boot ====
 function bindUi() {
@@ -168,6 +168,9 @@ window.dpRehydrate = ()=>{ /* host will respond to snapshot requests via router 
 function boot(){
   initUi();
   bindUi();
+  // WIRE ROUTER → WS
+  setOnSocketMessage(routerOnMessage);
+
   // URL kill-switch: ?reset / #reset / ?wipe / ?clear
   if (/(^|[?#&])(reset|wipe|clear)(=1)?/i.test(location.search + location.hash)) { hardReset('URL reset'); return; }
   tryAutoResume();
