@@ -1,65 +1,321 @@
-// js/router.js — FULL FILE (patch-aware, blob-safe)
+// js/router.js — hydration-aware client router (full file replacement)
 import { state } from './state.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
 import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
 import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
 
-// ---------- tiny helpers ----------
-const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
-const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
-const U = (s) => String(s || '').toUpperCase();
+// ---------------------------------------------------------------------------
+// Hydration + dedupe guards
+// ---------------------------------------------------------------------------
+const HYDRATE_KICK_DELAY_MS = 320;
+const HYDRATE_RETRY_DELAY_MS = 6200;
+const MESSAGE_CACHE_LIMIT = 240;
+const CATALOG_RENDER_DEBOUNCE_MS = 140;
 
-const normType = (t) => {
-  const s = U(t);
-  if (!s) return 'TEXT';
+let hydrateKickTimer = 0;
+let hydrateRetryTimer = 0;
+let hydrateAttempts = 0;
+let catalogRenderTimer = 0;
 
-  // Accept real state shapes
-  if (s.includes('BROADCAST_STATE') || s === 'STATE' || s.includes('STATEENVELOPE')) return 'STATE';
+const seenMessages = new Map();
+let lastLobbyVisible = false;
+let lastPhaseValue = state.phase || '';
+let rollOverlayVisible = false;
 
-  // Only treat as character-catalog if the token itself indicates CHARACTER
-  if (/^(CHAR(ACTER)?_)?CATALOG_?PATCH$/.test(s)) return 'CHARACTER_CATALOG_PATCH';
-  if (/^(CHAR(ACTER)?_)?CATALOG$/.test(s))          return 'CHARACTER_CATALOG';
+function maybeSetPhase(next) {
+  if (!next) return;
+  const clean = String(next);
+  if (lastPhaseValue === clean) return;
+  lastPhaseValue = clean;
+  setPhase(clean);
+}
 
-  // HELLO-ish signals
-  if (s === 'HELLO_OK' || s === 'WELCOME' || s === 'ROOM_OPEN' || s === 'PONG') return 'HELLO';
+function maybeSetLobbyVisible(on) {
+  const flag = !!on;
+  if (lastLobbyVisible === flag) return;
+  lastLobbyVisible = flag;
+  setLobbyVisible(flag);
+}
 
-  return s;
-};
+function ensureLobbyShown() {
+  maybeSetLobbyVisible(true);
+  maybeSetPhase('lobby');
+}
 
+function cancelHydrateRetry() {
+  if (hydrateRetryTimer) {
+    clearTimeout(hydrateRetryTimer);
+    hydrateRetryTimer = 0;
+  }
+}
+
+function resetHydrationTracking({ keepVersion = false } = {}) {
+  state.hydrated = false;
+  if (!keepVersion) state._hydratedVersion = null;
+  state._rehydrateRequested = false;
+  state._rehydrateRequestedVersion = null;
+  state._lastRehydrateAt = 0;
+  hydrateAttempts = 0;
+  if (hydrateKickTimer) {
+    clearTimeout(hydrateKickTimer);
+    hydrateKickTimer = 0;
+  }
+  cancelHydrateRetry();
+}
+
+function markHydrated({ version = null } = {}) {
+  state.hydrated = true;
+  const normalized = version || state.catalogVersion || null;
+  if (normalized) state._hydratedVersion = normalized;
+  state._rehydrateRequested = false;
+  state._rehydrateRequestedVersion = null;
+  cancelHydrateRetry();
+  if (hydrateKickTimer) {
+    clearTimeout(hydrateKickTimer);
+    hydrateKickTimer = 0;
+  }
+  hydrateAttempts = 0;
+}
+
+function requestHydrateBurst(reason = 'kick') {
+  const knownVersion = state.catalogVersion ?? null;
+  if (state.hydrated && (!knownVersion || state._hydratedVersion === knownVersion)) return;
+  if (hydrateAttempts >= 2) return;
+
+  hydrateAttempts += 1;
+  state._rehydrateRequested = true;
+  state._rehydrateRequestedVersion = knownVersion;
+  state._lastRehydrateAt = Date.now();
+
+  wsSend({ type: 'REQUEST_SNAPSHOT', reason });
+  wsSend({ type: 'REQUEST_CATALOG', reason });
+
+  if (hydrateAttempts === 1) {
+    cancelHydrateRetry();
+    hydrateRetryTimer = setTimeout(() => {
+      hydrateRetryTimer = 0;
+      if (!state.hydrated) requestHydrateBurst('retry-timeout');
+    }, HYDRATE_RETRY_DELAY_MS);
+  }
+}
+
+function scheduleHydrateKick(delay = HYDRATE_KICK_DELAY_MS) {
+  if (state.hydrated) return;
+  if (hydrateAttempts > 0) return;
+  if (hydrateKickTimer) return;
+  hydrateKickTimer = setTimeout(() => {
+    hydrateKickTimer = 0;
+    requestHydrateBurst('kick');
+  }, delay);
+}
+
+function buildMessageKey(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const type = String(raw.type || raw.msgType || raw.kind || '').toUpperCase();
+  const directId = raw.id ?? raw.messageId ?? raw.msgId ?? raw.uuid ?? raw.guid;
+  if (directId !== undefined && directId !== null) return `${type}|id:${directId}`;
+  const seq = raw.seq ?? raw.sequence ?? raw.index ?? raw.order ?? raw.position ?? raw.patchIndex;
+  if (seq !== undefined && seq !== null) return `${type}|seq:${seq}`;
+  const ts = raw.ts ?? raw.timestamp ?? raw.sentAt ?? raw.time ?? raw.createdAt;
+  if (ts !== undefined && ts !== null) return `${type}|ts:${ts}`;
+  const rangeSources = [raw, raw.header, raw.stateHeader, raw.envelope, raw.payload];
+  for (const source of rangeSources) {
+    if (!source || typeof source !== 'object') continue;
+    const start = source.patchStart ?? source.start ?? source.rangeStart ?? source.from;
+    const end = source.patchEnd ?? source.end ?? source.rangeEnd ?? source.to;
+    if (start !== undefined || end !== undefined) return `${type}|patch:${start ?? ''}-${end ?? ''}`;
+    const range = source.patchRange ?? source.range;
+    if (range && typeof range === 'object') {
+      const rs = range.start ?? range.from ?? range.begin ?? range[0];
+      const re = range.end ?? range.to ?? range.finish ?? range[1];
+      if (rs !== undefined || re !== undefined) return `${type}|patch:${rs ?? ''}-${re ?? ''}`;
+    }
+    const ids = source.patchIds ?? source.ids;
+    if (Array.isArray(ids) && ids.length) return `${type}|patchIds:${ids.join(',')}`;
+  }
+  return null;
+}
+
+function shouldProcessMessage(raw) {
+  const key = buildMessageKey(raw);
+  if (!key) return true;
+  if (seenMessages.has(key)) return false;
+  seenMessages.set(key, Date.now());
+  if (seenMessages.size > MESSAGE_CACHE_LIMIT) {
+    const keys = Array.from(seenMessages.keys());
+    const trim = keys.length - MESSAGE_CACHE_LIMIT;
+    for (let i = 0; i < trim; i++) seenMessages.delete(keys[i]);
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog fingerprint + guard helpers
+// ---------------------------------------------------------------------------
+const VERSION_KEY_HINTS = ['catalogVersion', 'catalog_version'];
+const PORTRAIT_VALUE_KEYS = [
+  'portraitUrl', 'portraitData', 'imageUrl', 'portrait', 'portrait_url', 'portrait_data',
+  'thumbnailUrl', 'thumbUrl', 'thumb', 'avatarUrl', 'avatar'
+];
+const PLAYER_HINT_KEYS = [
+  'playerId', 'player_id', 'alias', 'joinedAt', 'joined_at', 'ready', 'isReady', 'seat', 'slot',
+  'position', 'connectionId', 'wsId', 'role', 'team', 'score', 'latency', 'ping', 'isHost'
+];
+
+function valueHasPortrait(value) {
+  if (!value) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'object') {
+    if (Array.isArray(value)) return value.some((item) => valueHasPortrait(item));
+    const keys = ['url', 'data', 'imageUrl', 'src'];
+    return keys.some((k) => valueHasPortrait(value[k]));
+  }
+  return false;
+}
+
+function hasPortraitCandidate(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  for (const key of PORTRAIT_VALUE_KEYS) {
+    if (valueHasPortrait(entry[key])) return true;
+  }
+  if (entry.raw && typeof entry.raw === 'object') {
+    for (const key of PORTRAIT_VALUE_KEYS) {
+      if (valueHasPortrait(entry.raw[key])) return true;
+    }
+  }
+  return false;
+}
+
+function looksLikePlayerWithoutPortrait(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (hasPortraitCandidate(entry)) return false;
+  const source = entry.raw && typeof entry.raw === 'object' ? entry.raw : entry;
+  return PLAYER_HINT_KEYS.some((key) => {
+    const value = source[key];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+}
+
+function passesCatalogGuard(entries) {
+  if (!Array.isArray(entries) || !entries.length) return false;
+  const objects = entries.filter((item) => item && typeof item === 'object');
+  if (!objects.length) return false;
+  if (!objects.some((item) => hasPortraitCandidate(item))) return false;
+  if (objects.every((item) => looksLikePlayerWithoutPortrait(item))) return false;
+  return true;
+}
+
+function toCatalogVersion(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  return null;
+}
+
+function sniffCatalogVersion(source, seen = new Set(), depth = 0) {
+  if (!source || typeof source !== 'object' || seen.has(source) || depth > 4) return null;
+  seen.add(source);
+
+  if (Array.isArray(source)) {
+    for (const item of source) {
+      const found = sniffCatalogVersion(item, seen, depth + 1);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  for (const key of VERSION_KEY_HINTS) {
+    if (key in source && source[key] != null) return source[key];
+  }
+
+  const nestedKeys = ['catalog', 'meta', 'header', 'stateHeader', 'envelope', 'payload', 'data', 'body', 'state'];
+  for (const key of nestedKeys) {
+    const value = source[key];
+    if (value && typeof value === 'object') {
+      const nested = sniffCatalogVersion(value, seen, depth + 1);
+      if (nested != null) return nested;
+    }
+  }
+
+  if (source.version != null) {
+    const hint = String(source.type || source.kind || source.msgType || '').toUpperCase();
+    if (!hint || hint.includes('CATALOG') || hint.includes('LOBBY')) return source.version;
+  }
+
+  return null;
+}
+
+function noteCatalogVersion(...sources) {
+  for (const source of sources) {
+    if (!source) continue;
+    const raw = sniffCatalogVersion(source);
+    const normalized = toCatalogVersion(raw);
+    if (!normalized) continue;
+    if (state.catalogVersion !== normalized) {
+      const prevHydrated = state._hydratedVersion;
+      state.catalogVersion = normalized;
+      if (prevHydrated && prevHydrated !== normalized) {
+        state.hydrated = false;
+        state._rehydrateRequested = false;
+        state._rehydrateRequestedVersion = null;
+        hydrateAttempts = 0;
+        cancelHydrateRetry();
+      }
+    }
+    return normalized;
+  }
+  return null;
+}
+
+function stableOptionSignature(obj, depth = 0) {
+  if (!obj || typeof obj !== 'object') return '';
+  if (depth > 3) return '';
+  const keys = Object.keys(obj).sort().filter((key) => !/time|stamp|date/i.test(key));
+  const parts = [];
+  for (const key of keys) {
+    const value = obj[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = stableOptionSignature(value, depth + 1);
+      if (nested) parts.push(`${key}:{${nested}}`);
+    } else if (Array.isArray(value)) {
+      if (!value.length) continue;
+      const sample = value.slice(0, 3).map((item) => String(item ?? '')).join('|');
+      parts.push(`${key}=[${sample}]`);
+    } else if (value !== undefined) {
+      parts.push(`${key}=${String(value)}`);
+    }
+  }
+  return parts.join(',');
+}
+
+function buildCatalogSignature(entries, options) {
+  const list = Array.isArray(entries) ? entries : [];
+  const head = list.slice(0, 8).map((entry) => {
+    if (!entry || typeof entry !== 'object') return '';
+    const raw = entry.raw && typeof entry.raw === 'object' ? entry.raw : entry;
+    const id = raw.id ?? raw.characterId ?? raw.key ?? raw.slug ?? entry.id ?? '';
+    const label = raw.label ?? raw.name ?? raw.title ?? entry.label ?? '';
+    return `${id}:${label}`;
+  }).join('|');
+  const optionSig = stableOptionSignature(options);
+  return `${list.length}|${head}|${optionSig}`;
+}
+
+// ---------------------------------------------------------------------------
+// Roll snapshot helpers
+// ---------------------------------------------------------------------------
 const PLAYER_LABEL_KEYS = ['name','displayName','playerName','label','nickname','handle','title'];
 const ORDER_KEYS = ['order','turnOrder','turn_order','orderedPlayers','playerOrder','players','finalOrder','sequence','results','rolls','list'];
-
-// Merge a shallow state payload into our local state
-function mergeState(s) {
-  if (!s) return;
-  Object.assign(state, s);
-  if (s.phase) setPhase(s.phase);
-  // If a catalog came with state, render it
-  const cat = s.catalog || s.lobby?.catalog;
-  if (cat && Array.isArray(cat.entries) && cat.entries.length) {
-    setLobbyVisible(true);
-    renderCatalog(cat);
-    state.hydrated = true;
-  }
-}
-
-// Some hosts send catalog as its own message
-function handleCatalogMessage(msg) {
-  const cat = msg.catalog || msg.data?.catalog || msg.payload?.catalog;
-  if (cat && Array.isArray(cat.entries) && cat.entries.length) {
-    state.catalog = cat;
-    setLobbyVisible(true);
-    renderCatalog(cat);
-    state.hydrated = true;
-  }
-}
 
 function toPlayerLabel(entry) {
   if (entry == null) return '';
   if (typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'bigint') return String(entry);
   if (Array.isArray(entry)) {
-    if (entry.length === 0) return '';
+    if (!entry.length) return '';
     if (entry.length === 1) return toPlayerLabel(entry[0]);
     return toPlayerLabel(entry[1] ?? entry[0]);
   }
@@ -77,7 +333,7 @@ function toPlayerLabel(entry) {
 function toPlayerId(entry) {
   if (entry == null) return null;
   if (Array.isArray(entry)) {
-    if (entry.length === 0) return null;
+    if (!entry.length) return null;
     if (entry.length === 1) return toPlayerId(entry[0]);
     const [, value] = entry;
     const nested = toPlayerId(value);
@@ -112,7 +368,7 @@ function toRollNumber(value) {
 function extractRollValue(entry) {
   if (entry == null) return null;
   if (Array.isArray(entry)) {
-    if (entry.length === 0) return null;
+    if (!entry.length) return null;
     if (entry.length === 1) return extractRollValue(entry[0]);
     const second = extractRollValue(entry[1]);
     if (second != null) return second;
@@ -204,9 +460,7 @@ function findTurnOrderData(root, limit = 500) {
     const statusRaw = node.status ?? node.state ?? node.phase ?? node.stage ?? node.turnOrderStatus ?? node.turnOrderState;
     const statusHasTurn = typeof statusRaw === 'string' && statusRaw.toLowerCase().includes('turn');
     const playerId = toPlayerId(node);
-    if (orderList.length || hasRoll || hasPrompt || statusHasTurn) {
-      if (orderList.length || playerId != null || hasRoll || hasPrompt) return node;
-    }
+    if (orderList.length || hasRoll || hasPrompt || statusHasTurn || playerId) return node;
 
     for (const value of Object.values(node)) {
       if (value && typeof value === 'object') queue.push(value);
@@ -215,350 +469,311 @@ function findTurnOrderData(root, limit = 500) {
   return null;
 }
 
-function extractBoardRollData(root, limit = 500) {
-  const queue = [root];
-  let guard = 0;
-  while (queue.length && guard++ < limit) {
-    const node = queue.shift();
-    if (!node || typeof node !== 'object') continue;
-    if (Array.isArray(node)) {
-      for (const item of node) if (item && typeof item === 'object') queue.push(item);
-      continue;
-    }
-    if (Array.isArray(node.entries) && node.entries.length && !node.canRoll && !node.roll && !node.rollPrompt) {
-      // catalog-like snapshot; skip
-      continue;
-    }
-    if (node.rollPrompt && typeof node.rollPrompt === 'object') return node.rollPrompt;
-    const playerCandidate = node.playerId ?? node.currentPlayerId ?? node.activePlayerId ?? node.nextPlayerId ?? node.socketId ?? (node.player && (node.player.playerId ?? node.player.id));
-    const canRollFlag = node.canRoll ?? node.canRollNow ?? node.shouldRoll ?? node.allowRoll ?? node.allowed ?? node.isMyTurn ?? node.isActive ?? node.active ?? node.canTapRoll;
-    const promptLike = typeof node.prompt === 'string' || typeof node.message === 'string' || typeof node.text === 'string' || typeof node.statusText === 'string';
-    const rollLike = extractRollValue(node);
-    if (playerCandidate != null && (promptLike || rollLike != null || typeof canRollFlag === 'boolean')) return node;
-
-    for (const value of Object.values(node)) {
-      if (value && typeof value === 'object') queue.push(value);
+// ---------------------------------------------------------------------------
+// Lobby helpers
+// ---------------------------------------------------------------------------
+function countPlayers(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return 0;
+  const playerArrays = [snapshot.players, snapshot.playerList, snapshot.player_order, snapshot.turnOrder?.players];
+  let playerCount = 0;
+  for (const value of playerArrays) {
+    if (Array.isArray(value) && value.length) {
+      playerCount = Math.max(playerCount, value.length);
     }
   }
-  return null;
+  return playerCount;
 }
 
-function handleTurnOrderSnapshot(snapshot, { typeHint = '' } = {}) {
-  if (!snapshot || typeof snapshot !== 'object') return false;
+function buildLobbySignature(snapshot, catalogEntries) {
+  if (!snapshot || typeof snapshot !== 'object') return '';
+  const roomId = snapshot.roomId ?? snapshot.room ?? state.roomId ?? '';
+  const phase = snapshot.phase ?? snapshot.stage ?? snapshot.status ?? state.phase ?? '';
+  const playerCount = countPlayers(snapshot);
+  const catalogSize = Array.isArray(catalogEntries) ? catalogEntries.length : Array.isArray(state.catalog?.entries) ? state.catalog.entries.length : 0;
+  return `${roomId}|${phase}|${playerCount}|${catalogSize}`;
+}
 
-  const normalizedType = String(typeHint || '').toUpperCase();
-  const statusRaw = snapshot.status ?? snapshot.state ?? snapshot.phase ?? snapshot.stage ?? snapshot.turnOrderStatus ?? snapshot.turnOrderState;
-  const status = typeof statusRaw === 'string' ? statusRaw.toLowerCase() : '';
-  const promptText = snapshot.prompt ?? snapshot.turnOrderPrompt ?? '';
-  const statusText = snapshot.statusText ?? '';
-  const messageText = snapshot.message ?? snapshot.text ?? '';
-  const title = snapshot.title || 'Turn Order';
-  const orderList = getOrderArray(snapshot);
-  const resultsList = Array.isArray(snapshot.results) && snapshot.results.length ? snapshot.results : orderList;
-  const rolledIds = gatherRolledIds(snapshot);
-
-  const myId = String(state.playerId || '');
-  const playerId = toPlayerId(snapshot);
-  const rollValue = extractRollValue(snapshot);
-  const mine = myId && playerId && String(playerId) === myId;
-  if (mine && rollValue != null) rolledIds.add(myId);
-
-  const stageIsFinal = snapshot.final === true || snapshot.complete === true || snapshot.completed === true ||
-    status.includes('final') || status.includes('complete') || status.includes('finished') || status.includes('done') ||
-    normalizedType.includes('FINAL') || normalizedType.includes('COMPLETE');
-
-  const stageIsFeedback = rollValue != null || normalizedType.includes('RESULT') || normalizedType.includes('FEEDBACK') ||
-    status.includes('rolled') || status.includes('result');
-
-  const promptCandidate = promptText || messageText || statusText;
-
-  if (stageIsFinal || (orderList.length && (status.includes('locked') || status.includes('closed')))) {
-    state.inTurnOrder = false;
-    state.myHasRolled = false;
-    state.canRollNow = false;
-    const text = snapshot.orderText || snapshot.finalText || buildOrderText(orderList.length ? orderList : resultsList);
-    const msg = statusText || messageText || 'Order set.';
-    if (text) updateRollUI({ orderText: text, msg, ok: true });
-    else updateRollUI({ msg, ok: true });
+function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
+  const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
+  if (shouldShow) {
+    if (!rollOverlayVisible) {
+      showRollOverlay();
+      rollOverlayVisible = true;
+    }
+    if (immediateUpdate) updateRollUI();
+  } else if (rollOverlayVisible) {
     hideRollOverlay();
-    return true;
+    rollOverlayVisible = false;
+  } else if (immediateUpdate && rollOverlayVisible) {
+    updateRollUI();
   }
-
-  const hasRolled = rolledIds.has(myId);
-  state.myHasRolled = hasRolled;
-
-  if (stageIsFeedback) {
-    const who = toPlayerLabel(snapshot) || (mine ? 'You' : 'Player');
-    const msg = messageText || statusText || (rollValue != null ? `${who} rolled ${rollValue}.` : `${who} rolled.`);
-    if (mine && rollValue != null) {
-      updateRollUI({ value: rollValue, msg, ok: true });
-    } else {
-      updateRollUI({ msg });
-    }
-    return true;
-  }
-
-  const shouldStart = normalizedType.includes('START') || normalizedType.includes('OPEN') || normalizedType.includes('STATUS') ||
-    normalizedType.includes('STATE') || normalizedType.includes('PROMPT') || status.includes('start') || status.includes('open') ||
-    status.includes('pending') || status.includes('waiting') || status.includes('prompt') || status.includes('ready') ||
-    !state.inTurnOrder || (playerId != null && !rolledIds.has(String(playerId)));
-
-  if (!shouldStart && !promptCandidate) return false;
-
-  setPhase('turn_order');
-  state.inTurnOrder = true;
-
-  const currentTargetId = snapshot.currentPlayerId ?? snapshot.activePlayerId ?? snapshot.nextPlayerId ?? snapshot.promptPlayerId ?? snapshot.waitingForId ?? snapshot.waitingOn ?? snapshot.turn?.currentPlayerId;
-  const explicitRollFlag = snapshot.canRoll ?? snapshot.canPlayerRoll ?? snapshot.allowRoll ?? snapshot.shouldRoll ?? snapshot.canTapRoll;
-  const targetId = currentTargetId != null ? String(currentTargetId) : null;
-  const mineTurn = targetId ? targetId === myId : null;
-
-  if (typeof explicitRollFlag === 'boolean') {
-    state.canRollNow = explicitRollFlag;
-  } else if (mineTurn !== null) {
-    state.canRollNow = mineTurn && !state.myHasRolled;
-  } else {
-    state.canRollNow = !state.myHasRolled;
-  }
-
-  const overlayPrompt = promptText || promptCandidate || 'Tap ROLL to set the order.';
-  showRollOverlay({ title, prompt: overlayPrompt });
-
-  const myEntry = resultsList.find((entry) => myId && String(toPlayerId(entry) || '') === myId);
-  const myEntryRoll = extractRollValue(myEntry);
-  if (myEntryRoll != null) {
-    state.myHasRolled = true;
-    state.canRollNow = false;
-    const msg = statusText || messageText || `You rolled ${myEntryRoll}.`;
-    updateRollUI({ value: myEntryRoll, msg, ok: true });
-  } else {
-    updateRollUI({ msg: overlayPrompt });
-  }
-
-  return true;
 }
 
-function handleTurnOrderFallback(type, raw) {
-  const normalized = U(type);
-  if (!normalized || normalized.includes('LOBBY')) return false;
-  const looksTurnOrderType = normalized.includes('TURN_ORDER') || normalized.includes('TURNORDER');
-  if (looksTurnOrderType && raw && typeof raw === 'object') {
-    const payload = raw.turnOrder || raw.turn_order || raw.payload || raw.data || raw.body || raw;
-    const snapshot = findTurnOrderData(payload) || payload;
-    if (snapshot && typeof snapshot === 'object' && snapshot !== raw) {
-      if (handleTurnOrderSnapshot(snapshot, { typeHint: normalized })) return true;
-    } else if (snapshot && typeof snapshot === 'object') {
-      if (handleTurnOrderSnapshot(snapshot, { typeHint: normalized })) return true;
-    }
-  }
-
-  const nested = normalized.includes('LOBBY') ? null : findTurnOrderData(raw);
-  if (nested && typeof nested === 'object') {
-    return handleTurnOrderSnapshot(nested, { typeHint: normalized });
-  }
-  return false;
-}
-
-function handleBoardRollSnapshot(snapshot, { typeHint = '' } = {}) {
-  if (!snapshot || typeof snapshot !== 'object') return false;
-
-  const normalized = String(typeHint || '').toUpperCase();
-  if (normalized.includes('TURN_ORDER')) return false;
-
-  const statusRaw = snapshot.status ?? snapshot.state ?? snapshot.phase ?? snapshot.stage ?? '';
-  const status = typeof statusRaw === 'string' ? statusRaw.toLowerCase() : '';
-  const promptValue = snapshot.prompt ?? snapshot.turnPrompt ?? '';
-  const messageValue = snapshot.statusText ?? snapshot.message ?? snapshot.text ?? '';
-  const promptOrMessage = promptValue || messageValue;
-  const title = snapshot.title || (status.includes('order') ? 'Turn Order' : 'Your Turn');
-
-  const myId = String(state.playerId || '');
-  const targetId = snapshot.currentPlayerId ?? snapshot.activePlayerId ?? snapshot.nextPlayerId ?? snapshot.playerId ?? snapshot.socketId ?? (snapshot.player && (snapshot.player.playerId ?? snapshot.player.id));
-  const target = targetId != null ? String(targetId) : null;
-  const mine = target && myId ? target === myId : false;
-
-  const canRollFlag = snapshot.canRoll ?? snapshot.canRollNow ?? snapshot.shouldRoll ?? snapshot.allowRoll ?? snapshot.allowed ?? snapshot.isMyTurn ?? snapshot.isActive ?? snapshot.active ?? snapshot.canTapRoll;
-  const explicitCanRoll = typeof canRollFlag === 'boolean' ? canRollFlag : null;
-
-  const rollValue = extractRollValue(snapshot);
-  const stageIsResult = rollValue != null || status.includes('rolled') || status.includes('move') || status.includes('moved') || normalized.includes('ROLL_RESULT') || normalized.includes('RESULT');
-  const stageIsPrompt = status.includes('prompt') || status.includes('turn') || status.includes('await') || status.includes('wait') || status.includes('ready') || normalized.includes('PROMPT') || normalized.includes('TURN');
-
-  if (stageIsResult) {
-    const name = toPlayerLabel(snapshot) || (mine ? 'You' : 'Player');
-    const msg = promptOrMessage || (rollValue != null ? `${name} rolled ${rollValue}.` : `${name} rolled.`);
-    if (mine) {
-      state.canRollNow = false;
-      state.myHasRolled = true;
-      if (rollValue != null) updateRollUI({ value: rollValue, msg: msg || 'Moving…', ok: true });
-      else updateRollUI({ msg: msg || 'Moving…', ok: true });
-      hideRollOverlay();
-    } else {
-      if (msg) updateRollUI({ msg });
-    }
-    return true;
-  }
-
-  if (stageIsPrompt || promptOrMessage || explicitCanRoll !== null) {
-    setPhase('board');
-    state.inTurnOrder = false;
-    state.myHasRolled = false;
-    const allow = explicitCanRoll !== null ? explicitCanRoll : mine;
-    state.canRollNow = !!allow;
-    if (state.canRollNow) {
-      const overlayPrompt = promptValue || promptOrMessage || 'Tap ROLL to move.';
-      showRollOverlay({ title, prompt: overlayPrompt });
-      updateRollUI({ msg: overlayPrompt });
-    } else {
-      hideRollOverlay();
-      if (promptOrMessage) updateRollUI({ msg: promptOrMessage });
-      else updateRollUI();
-    }
-    return true;
-  }
-
-  return false;
-}
-
-function handleBoardRollFallback(type, raw) {
-  const normalized = U(type);
-  if (!normalized || normalized.includes('LOBBY')) return false;
-  if (normalized.includes('TURN_ORDER')) return false;
-  if (normalized.includes('ROLL') || normalized.includes('TURN')) {
-    if (raw && typeof raw === 'object') {
-      const payload = raw.payload || raw.data || raw.body || raw;
-      const snapshot = extractBoardRollData(payload);
-      if (snapshot && typeof snapshot === 'object') {
-        if (handleBoardRollSnapshot(snapshot, { typeHint: normalized })) return true;
-      }
-    }
-  }
-  const nested = extractBoardRollData(raw);
-  if (nested && typeof nested === 'object') {
-    return handleBoardRollSnapshot(nested, { typeHint: normalized });
-  }
-  return false;
-}
-
-// Find the first object in a (possibly nested) payload that has any of add/update/remove arrays
-function findPatchTriplet(root) {
-  const q = [root];
-  let guard = 0;
-  while (q.length && guard++ < 1000) {
-    const n = q.shift();
-    if (!n || typeof n !== 'object') continue;
-    const cand = n.payload || n.body || n.data || n;
-    const hasTriplet = (o) =>
-      o && (Array.isArray(o.add) || Array.isArray(o.update) || Array.isArray(o.remove));
-    if (hasTriplet(cand)) return cand;
-    for (const k of Object.keys(n)) {
-      const v = n[k];
-      if (v && typeof v === 'object') q.push(v);
-    }
-  }
-  return null;
+// ---------------------------------------------------------------------------
+// Catalog apply helpers
+// ---------------------------------------------------------------------------
+function ensureCatalogContainer() {
+  if (!state.catalog) state.catalog = { entries: [] };
+  if (!Array.isArray(state.catalog.entries)) state.catalog.entries = [];
+  if (!Array.isArray(state._pendingCatalog)) state._pendingCatalog = [];
 }
 
 function applyCatalogPatch(trip) {
-  if (!state.catalog) state.catalog = { entries: [] };
+  ensureCatalogContainer();
   const list = state.catalog.entries;
-
   if (Array.isArray(trip.add)) {
     for (const e of trip.add) {
-      const id = String(e.id ?? e.characterId ?? e.key ?? Math.random());
-      const i = list.findIndex(x => String(x.id) === id);
-      if (i >= 0) list[i] = { ...list[i], ...e, id };
-      else list.push({ ...e, id });
+      const raw = e && typeof e === 'object' ? e : {};
+      const id = String(raw.id ?? raw.characterId ?? raw.key ?? Math.random());
+      const i = list.findIndex((x) => String(x.id) === id);
+      if (i >= 0) list[i] = { ...list[i], ...raw, id };
+      else list.push({ ...raw, id });
     }
   }
   if (Array.isArray(trip.update)) {
     for (const e of trip.update) {
-      const id = String(e.id ?? e.characterId ?? e.key);
-      const i = list.findIndex(x => String(x.id) === id);
-      if (i >= 0) list[i] = { ...list[i], ...e, id };
+      const raw = e && typeof e === 'object' ? e : {};
+      const id = String(raw.id ?? raw.characterId ?? raw.key ?? '');
+      if (!id) continue;
+      const i = list.findIndex((x) => String(x.id) === id);
+      if (i >= 0) list[i] = { ...list[i], ...raw, id };
     }
   }
   if (Array.isArray(trip.remove)) {
-    const removes = trip.remove.map(x => String(x));
+    const removes = trip.remove.map((x) => String(x));
     const keep = [];
     for (const e of list) if (!removes.includes(String(e.id))) keep.push(e);
     state.catalog.entries = keep;
   }
 }
 
-function setDbg(s) {
-  const pill = document.querySelector('#dbg, #dbgLast, .dbg-last, .pill-last');
-  if (pill) pill.textContent = `last: ${s}`;
+function commitCatalogRender(list, { debounce = false } = {}) {
+  const doRender = () => {
+    renderCatalog(list);
+    if (rollOverlayVisible) updateRollUI();
+  };
+
+  if (debounce) {
+    if (catalogRenderTimer) clearTimeout(catalogRenderTimer);
+    catalogRenderTimer = setTimeout(() => {
+      catalogRenderTimer = 0;
+      doRender();
+    }, CATALOG_RENDER_DEBOUNCE_MS);
+  } else {
+    if (catalogRenderTimer) {
+      clearTimeout(catalogRenderTimer);
+      catalogRenderTimer = 0;
+    }
+    doRender();
+  }
 }
 
-function applyCatalogSnapshot(entries, { force = false } = {}) {
-  const currentCount = Array.isArray(state.catalog?.entries) ? state.catalog.entries.length : 0;
-  const explicit = entries !== undefined && entries !== null;
+function applyCatalogSnapshot(entries, { options = null, force = false, version = null, debounce = false } = {}) {
+  ensureCatalogContainer();
   const nextList = Array.isArray(entries) ? entries : [];
 
-  // NEW: if someone forced us with an empty list, ignore (prevents “blink to empty”)
-  if (force && explicit && nextList.length === 0) return false;
-
-  // unchanged/no-op protections
-  if (!force && currentCount && !explicit) return false;
-
-  if (!force && currentCount && nextList.length === 0 && explicit) {
-    ensureLobbyShown();
-    renderCatalog([]);
+  if (nextList.length && !passesCatalogGuard(nextList)) return false;
+  if (force && nextList.length === 0 && state.catalog.entries.length) {
+    state.catalog.entries = [];
+    state._pendingCatalog = [];
+    state.catalogFingerprint = '';
+    commitCatalogRender([], { debounce: false });
+    markHydrated({ version: null });
     return true;
   }
 
-  if (!force && currentCount && nextList.length && currentCount === nextList.length) {
-    const unchanged = nextList.every((entry, idx) => {
-      const existing = state.catalog.entries[idx];
-      return existing && String(existing.id) === String(entry.id);
-    });
-    if (unchanged) return false;
+  const nextSignature = buildCatalogSignature(nextList, options);
+  if (!force && state.catalogFingerprint && state.catalogFingerprint === nextSignature) {
+    markHydrated({ version: state.catalogVersion });
+    return false;
   }
 
-  ensureLobbyShown();
-  renderCatalog(nextList);
+  state.catalog.entries = nextList;
+  state._pendingCatalog = nextList;
+  state.catalogFingerprint = nextSignature;
+
+  const stubLobby = { roomId: state.roomId, phase: lastPhaseValue || state.phase || '', players: Array.from({ length: state._lastPlayerCount || 0 }) };
+  const derivedSignature = buildLobbySignature(stubLobby, nextList);
+  if (derivedSignature) state._lobbySignature = derivedSignature;
+
+  if (nextList.length) {
+    commitCatalogRender(nextList, { debounce });
+    maybeSetLobbyVisible(true);
+  }
+
+  if (version) {
+    const normalized = toCatalogVersion(version);
+    if (normalized) {
+      state.catalogVersion = normalized;
+      state._hydratedVersion = normalized;
+    }
+  }
+
+  markHydrated({ version: state.catalogVersion });
   return true;
 }
 
-function tryConsumeCatalog(root, opts = {}) {
-  const entries = extractCatalogEntries(root);
-  if (Array.isArray(entries)) {
-    applyCatalogSnapshot(entries, opts);
-    return true;
+function findPatchTriplet(root) {
+  const queue = [root];
+  let guard = 0;
+  while (queue.length && guard++ < 1000) {
+    const node = queue.shift();
+    if (!node || typeof node !== 'object') continue;
+    const candidate = node.payload || node.body || node.data || node;
+    const hasTriplet = (o) => o && (Array.isArray(o.add) || Array.isArray(o.update) || Array.isArray(o.remove));
+    if (hasTriplet(candidate)) return candidate;
+    for (const value of Object.values(node)) {
+      if (value && typeof value === 'object') queue.push(value);
+    }
   }
-  return false;
+  return null;
 }
 
-// ---------- main router ----------
-export async function onSocketMessage(msg){
+function pickCatalogEntries(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  let entries = Array.isArray(payload.entries) ? payload.entries
+    : Array.isArray(payload.list) ? payload.list
+    : Array.isArray(payload.characters) ? payload.characters
+    : undefined;
+  if (!Array.isArray(entries) || !entries.length) {
+    const extracted = extractCatalogEntries(payload);
+    if (Array.isArray(extracted) && extracted.length) entries = extracted;
+  }
+  if (Array.isArray(entries) && entries.length && passesCatalogGuard(entries)) return entries;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot / lobby handling
+// ---------------------------------------------------------------------------
+function mergeState(snapshot, { debounceCatalog = false } = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return;
+  Object.assign(state, snapshot);
+  if (snapshot.phase) maybeSetPhase(snapshot.phase);
+  if (snapshot.roomId) state.roomId = snapshot.roomId;
+  if (snapshot.playerId) state.playerId = snapshot.playerId;
+
+  const catalog = snapshot.catalog || snapshot.lobby?.catalog;
+  if (catalog && Array.isArray(catalog.entries) && catalog.entries.length && passesCatalogGuard(catalog.entries)) {
+    noteCatalogVersion(catalog, snapshot);
+    applyCatalogSnapshot(catalog.entries, { options: catalog.options ?? catalog.meta ?? null, force: true, version: catalog.version ?? snapshot.version ?? null, debounce: debounceCatalog });
+  }
+
+  const pendingEntries = Array.isArray(catalog?.entries) ? catalog.entries : Array.isArray(state.catalog?.entries) ? state.catalog.entries : null;
+  const lobbyRoot = snapshot.lobby || snapshot;
+  const playerCount = countPlayers(lobbyRoot);
+  const lobbySignature = buildLobbySignature(lobbyRoot, pendingEntries || []);
+  if (lobbySignature) {
+    if (state._lobbySignature !== lobbySignature) {
+      maybeSetLobbyVisible(true);
+    }
+    state._lobbySignature = lobbySignature;
+  }
+  state._lastPlayerCount = playerCount;
+
+  markHydrated({ version: state.catalogVersion });
+}
+
+function handleTurnOrderSnapshot(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const turnOrder = findTurnOrderData(raw);
+  if (!turnOrder || typeof turnOrder !== 'object') return false;
+
+  const orderList = getOrderArray(turnOrder);
+  const orderText = buildOrderText(orderList);
+  const rolled = gatherRolledIds(turnOrder);
+
+  const myId = state.playerId ? String(state.playerId) : null;
+  state.inTurnOrder = !!turnOrder.active || !!turnOrder.prompt || !!orderList.length;
+  state.canRollNow = !!turnOrder.canRoll || !!turnOrder.allowRoll || !!turnOrder.prompt;
+  if (myId) state.myHasRolled = rolled.has(myId);
+
+  if (turnOrder.phase) maybeSetPhase(turnOrder.phase);
+  if (turnOrder.statusText) updateRollUI({ msg: turnOrder.statusText });
+  if (orderText) updateRollUI({ orderText, ok: true });
+
+  updateRollOverlayVisibility({ immediateUpdate: true });
+  return true;
+}
+
+function handleBoardRollSnapshot(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const allow = raw.canRoll || raw.allowRoll || raw.rollAllowed || raw.prompt === true;
+  const prompt = typeof raw.prompt === 'string' ? raw.prompt : raw.message || raw.text;
+  const title = raw.title || raw.heading || 'Roll';
+
+  const myId = state.playerId ? String(state.playerId) : null;
+  const rolled = gatherRolledIds(raw);
+  if (myId && rolled.size) state.myHasRolled = rolled.has(myId);
+
+  if (allow) {
+    state.canRollNow = true;
+    state.inTurnOrder = !!raw.turnOrder;
+    showRollOverlay({ title, prompt: prompt || 'Tap ROLL to move.' });
+    updateRollUI({ msg: prompt || 'Tap ROLL to move.' });
+    rollOverlayVisible = true;
+  } else {
+    state.canRollNow = false;
+    if (!state.inTurnOrder) hideRollOverlay();
+    if (prompt) updateRollUI({ msg: prompt });
+    rollOverlayVisible = false;
+  }
+
+  updateRollOverlayVisibility({ immediateUpdate: true });
+  return true;
+}
+
+function normType(t) {
+  const s = String(t || '').toUpperCase();
+  if (!s) return 'TEXT';
+  if (s.includes('BROADCAST_STATE') || s === 'STATE' || s.includes('STATEENVELOPE')) return 'STATE';
+  if (/^(CHAR(ACTER)?_)?CATALOG_?PATCH$/.test(s)) return 'CHARACTER_CATALOG_PATCH';
+  if (/^(CHAR(ACTER)?_)?CATALOG$/.test(s)) return 'CHARACTER_CATALOG';
+  if (s === 'HELLO_OK' || s === 'WELCOME' || s === 'ROOM_OPEN' || s === 'PONG') return 'HELLO';
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// Message handling
+// ---------------------------------------------------------------------------
+async function onSocketMessage(msg) {
   try {
-    // Accept raw string, already-parsed object, or Event with .data (Blob/ArrayBuffer/String)
     let raw = msg;
     if (raw && typeof raw === 'object' && 'data' in raw) raw = raw.data;
-
     if (raw instanceof Blob) raw = await raw.text();
     else if (raw instanceof ArrayBuffer) raw = new TextDecoder().decode(raw);
 
-    // Allow batch arrays
     if (Array.isArray(raw)) {
       for (const item of raw) await onSocketMessage(item);
       return;
     }
 
     if (typeof raw === 'string') {
-      const s = raw.trim();
-      if (s.startsWith('{') || s.startsWith('[')) {
-        try { raw = JSON.parse(s); }
-        catch { setDbg('TEXT'); setStatus(s); ensureLobbyShown(); return; }
+      const trimmed = raw.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try { raw = JSON.parse(trimmed); }
+        catch { setStatus(trimmed); ensureLobbyShown(); return; }
       } else {
-        setDbg('TEXT'); setStatus(s); ensureLobbyShown(); return;
+        setStatus(trimmed);
+        ensureLobbyShown();
+        return;
       }
     }
 
-    // Now raw is object
+    if (!raw || typeof raw !== 'object') return;
+    if (!shouldProcessMessage(raw)) return;
+
     const type = normType(raw.type || raw.msgType || raw.kind);
-    setDbg(type);
+
+    if (type === 'WS_OPEN') {
+      resetHydrationTracking({ keepVersion: true });
+      scheduleHydrateKick();
+      return;
+    }
+    if (type === 'WS_RETRY') {
+      requestHydrateBurst('retry-signal');
+      return;
+    }
 
     switch (type) {
       case 'HELLO': {
@@ -567,192 +782,97 @@ export async function onSocketMessage(msg){
         ensureLobbyShown();
         if (raw.playerId) state.playerId = raw.playerId;
         if (raw.roomId) state.roomId = raw.roomId;
-        // Ask host to rehydrate us
-        wsSend && wsSend({ type: 'REQUEST_SNAPSHOT' });
-        wsSend && wsSend({ type: 'REQUEST_CATALOG' });
+        resetHydrationTracking({ keepVersion: true });
+        scheduleHydrateKick();
         return;
       }
 
       case 'CHARACTER_CATALOG': {
-        const p = raw.payload || raw.data || raw;
-
-        // Try all known shapes
-        let entries = Array.isArray(p?.entries) ? p.entries
-                    : Array.isArray(p?.list)     ? p.list
-                    : Array.isArray(p?.characters) ? p.characters
-                    : undefined;
-
-        if (!Array.isArray(entries) || entries.length === 0) {
-          const fallback = extractCatalogEntries(p);
-          if (Array.isArray(fallback) && fallback.length) entries = fallback;
-        }
-
-        // Only apply if we actually have entries; otherwise ignore (prevents wipe)
-        if (Array.isArray(entries) && entries.length) {
-          applyCatalogSnapshot(entries, { force: true });
+        const payload = raw.payload || raw.data || raw;
+        const version = noteCatalogVersion(payload, raw);
+        const entries = pickCatalogEntries(payload);
+        if (entries) {
+          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: version ?? payload?.version ?? raw.version, debounce: false });
         }
         return;
       }
 
       case 'CHARACTER_CATALOG_PATCH': {
-        const pack = raw.payload || raw.data || raw;
-        const trip = findPatchTriplet(pack);
+        const trip = findPatchTriplet(raw);
         if (trip) {
-          if (!state.catalog) state.catalog = { entries: [] };
           applyCatalogPatch(trip);
-          applyCatalogSnapshot(state.catalog.entries, { force: true });
+          noteCatalogVersion(trip, raw);
+          applyCatalogSnapshot(state.catalog.entries, { options: raw.payload?.options ?? raw.payload?.meta, force: true, version: state.catalogVersion, debounce: false });
+        } else {
+          const payload = raw.payload || raw.data || raw;
+          const entries = pickCatalogEntries(payload);
+          if (entries) applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: state.catalogVersion, debounce: false });
         }
+        markHydrated({ version: state.catalogVersion });
         return;
       }
 
       case 'STATE': {
-        const env = raw.envelope || raw.state || raw;
-        const header = env.header || env.stateHeader || {};
-        const body   = env.payload || env.state || env.data || {};
-        const typed  = normType(header.type || header.typeName || body.type || body.subtype);
-
-        // 1) Full catalog embedded in body
-        if (typed === 'CHARACTER_CATALOG' || Array.isArray(body.entries)) {
-          let entries = Array.isArray(body.entries)
-            ? body.entries
-            : Array.isArray(body.list)
-              ? body.list
-              : Array.isArray(body.characters)
-                ? body.characters
-                : [];
-          if (!entries.length) {
-            const fallback = extractCatalogEntries(body);
-            if (Array.isArray(fallback)) entries = fallback;
-          }
-          applyCatalogSnapshot(entries, { force: true });
-          return;
-        }
-
-        // 2) Patch batches (this is what your host is sending)
-        if (typed === 'CHARACTER_CATALOG_PATCH' || Array.isArray(env.patches) || Array.isArray(env.patch)) {
-          const packs = A(env.patches || env.patch);
-          if (!state.catalog) state.catalog = { entries: [] };
-          for (const pack of packs) {
-            const trip = findPatchTriplet(pack);
-            if (trip) applyCatalogPatch(trip);
-          }
-          applyCatalogSnapshot(state.catalog.entries, { force: true });
-          return;
-        }
-
-        // 3) Defensive: anywhere in the envelope has a patch triplet
-        const trip = findPatchTriplet(env);
-        if (trip) {
-          if (!state.catalog) state.catalog = { entries: [] };
-          applyCatalogPatch(trip);
-          applyCatalogSnapshot(state.catalog.entries, { force: true });
-          return;
-        }
-
-        if (tryConsumeCatalog(env, { force: false })) return;
-        if (handleTurnOrderFallback(type, env) || handleBoardRollFallback(type, env)) return;
-
-        return;
-      }
-
-      case 'TURN_ORDER_START': {
-        setPhase('turn_order');
-        state.inTurnOrder = true;
-        state.canRollNow = false;
-        state.myHasRolled = false;
-        showRollOverlay({ title: 'Turn Order', prompt: 'Tap ROLL to set the order.' });
-        updateRollUI();
-        return;
-      }
-
-      case 'TURN_ORDER_FEEDBACK': {
-        const rollValue = raw.roll ?? raw.value ?? raw.total;
-        const playerId = raw.playerId || raw.id || raw.socketId;
-        const mine = !!playerId && String(playerId) === String(state.playerId || '');
-        if (mine) state.myHasRolled = true;
-        const who = raw.name || raw.displayName || (mine ? 'You' : 'Player');
-        const msg = rollValue != null ? `${who} rolled ${rollValue}.` : `${who} rolled.`;
-        if (mine && rollValue != null) {
-          updateRollUI({ value: rollValue, msg, ok: true });
-        } else {
-          updateRollUI({ msg });
-        }
-        return;
-      }
-
-      case 'TURN_ORDER_FINAL': {
-        const order = Array.isArray(raw.order) ? raw.order : [];
-        const toLabel = (entry) => entry?.name || entry?.displayName || entry?.playerName || entry?.playerId || entry?.id || '';
-        const text = order.map(toLabel).filter(Boolean).join(' → ');
-        state.inTurnOrder = false;
-        state.myHasRolled = false;
-        state.canRollNow = false;
-        if (text) updateRollUI({ orderText: text, msg: 'Order set.', ok: true });
-        else updateRollUI({ msg: 'Order set.', ok: true });
-        hideRollOverlay();
-        return;
-      }
-
-      case 'YOUR_TURN':
-      case 'ROLL_PROMPT': {
-        const playerId = raw.playerId || raw.id || raw.socketId;
-        const mine = !!playerId && String(playerId) === String(state.playerId || '');
-        setPhase('board');
-        state.inTurnOrder = false;
-        state.canRollNow = mine;
-        state.myHasRolled = false;
-        if (mine) {
-          showRollOverlay({ title: 'Your Turn', prompt: 'Tap ROLL to move.' });
-          updateRollUI();
-        } else {
-          hideRollOverlay();
-          updateRollUI();
-        }
-        return;
-      }
-
-      case 'MOVE_ROLL': {
-        const playerId = raw.playerId || raw.id || raw.socketId;
-        const mine = !!playerId && String(playerId) === String(state.playerId || '');
-        const value = raw.value ?? raw.roll ?? raw.steps;
-        if (mine) {
-          state.canRollNow = false;
-          state.myHasRolled = true;
-          if (value != null) updateRollUI({ value, msg: 'Moving…', ok: true });
-          else updateRollUI({ msg: 'Moving…', ok: true });
-          hideRollOverlay();
-        } else {
-          const who = raw.name || raw.displayName || 'Player';
-          if (value != null) updateRollUI({ msg: `${who} rolled ${value}.` });
-        }
-        return;
-      }
-
-      default:
-        if (handleTurnOrderFallback(type, raw) || handleBoardRollFallback(type, raw)) return;
-        // Unknowns: try defensive render if entries exist
-        const p = raw.payload || raw.data || raw;
-        if (p && Array.isArray(p.entries)) {
-          applyCatalogSnapshot(p.entries, { force: true });
-        } else {
-          const trip = findPatchTriplet(raw);
-          if (trip) {
-            if (!state.catalog) state.catalog = { entries: [] };
-            applyCatalogPatch(trip);
-            applyCatalogSnapshot(state.catalog.entries, { force: true });
+        const payload = raw.payload || raw.data || raw.body || raw.state || raw;
+        if (payload && typeof payload === 'object') {
+          if (payload.lobbySnapshot || payload.lobby_state) {
+            mergeState(payload.lobbySnapshot || payload.lobby_state, { debounceCatalog: true });
           } else {
-            tryConsumeCatalog(raw);
+            mergeState(payload.state || payload, { debounceCatalog: true });
           }
         }
+        handleTurnOrderSnapshot(payload);
+        handleBoardRollSnapshot(payload);
+        updateRollOverlayVisibility({ immediateUpdate: true });
+        markHydrated({ version: state.catalogVersion });
         return;
+      }
+
+      case 'LOBBY_SNAPSHOT': {
+        const payload = raw.payload || raw.data || raw.body || raw.state || raw;
+        mergeState(payload, { debounceCatalog: true });
+        handleTurnOrderSnapshot(payload);
+        updateRollOverlayVisibility({ immediateUpdate: true });
+        markHydrated({ version: state.catalogVersion });
+        return;
+      }
+
+      case 'TURN_ORDER_SNAPSHOT': {
+        if (handleTurnOrderSnapshot(raw.payload || raw.data || raw)) markHydrated({ version: state.catalogVersion });
+        return;
+      }
+
+      case 'ROLL_PROMPT':
+      case 'YOUR_TURN':
+      case 'MOVE_ROLL':
+      case 'ROLL_STATE': {
+        const payload = raw.payload || raw.data || raw;
+        handleBoardRollSnapshot(payload);
+        markHydrated({ version: state.catalogVersion });
+        return;
+      }
+
+      default: {
+        const payload = raw.payload || raw.data || raw.body || raw;
+        const version = noteCatalogVersion(payload, raw);
+        const entries = pickCatalogEntries(payload);
+        if (entries) {
+          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: false, version: version ?? payload?.version ?? null, debounce: false });
+        }
+        handleTurnOrderSnapshot(payload);
+        handleBoardRollSnapshot(payload);
+        updateRollOverlayVisibility({ immediateUpdate: true });
+        markHydrated({ version: state.catalogVersion });
+        return;
+      }
     }
   } catch (err) {
-    console.log('router error:', err);
+    console.error('router error', err);
   }
 }
 
-// Ensure the shared ws layer forwards messages here immediately on module load and for legacy entry points.
 setOnSocketMessage(onSocketMessage);
 
-// Optional: if your ws layer wires events instead of raw strings
-export function onSocketEvent(ev) { return setOnSocketMessage(onSocketMessage); }
+export function onSocketEvent(ev) {
+  return setOnSocketMessage(onSocketMessage);
+}

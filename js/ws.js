@@ -22,7 +22,13 @@ function isTerminalClose(ev){
 
 // message router hook (set by router.js)
 let _onSocketMessage = () => {};
-export function setOnSocketMessage(fn){ _onSocketMessage = fn || (()=>{}); }
+let _boundRouterHandler = null;
+export function setOnSocketMessage(fn){
+  const handler = typeof fn === 'function' ? fn : () => {};
+  if (_boundRouterHandler === handler) return;
+  _boundRouterHandler = handler;
+  _onSocketMessage = handler;
+}
 
 // config
 const WS_BASE = 'wss://derpparty-relay.fly.dev/socket';
@@ -75,17 +81,56 @@ export function cancelReconnect(){
 }
 
 // rehydrate helpers
-function requestRehydrate(){
+const REHYDRATE_MIN_INTERVAL_MS = 1400;
+
+function hasCatalogContent(){
+  if (Array.isArray(state._pendingCatalog) && state._pendingCatalog.length) return true;
+  if (Array.isArray(state.catalog?.entries) && state.catalog.entries.length) return true;
+  const grid = state.els.charGrid;
+  if (grid && grid.querySelector('.charBtn')) return true;
+  return false;
+}
+
+function shouldSkipHydrate(){
+  const knownVersion = state.catalogVersion ?? null;
+  const hydratedVersion = state._hydratedVersion ?? null;
+  if (state.hydrated && (!knownVersion || hydratedVersion === knownVersion)) return true;
+  if (state._rehydrateRequested && (!knownVersion || state._rehydrateRequestedVersion === knownVersion)) return true;
+  return false;
+}
+
+function requestRehydrate(arg){
+  const opts = typeof arg === 'object' && arg !== null ? arg : { force: !!arg };
+  const force = !!opts.force;
+
+  if (!state.hydrated && hasCatalogContent()) {
+    state.hydrated = true;
+    if (!state._hydratedVersion) state._hydratedVersion = state.catalogVersion ?? null;
+  }
+
+  const now = Date.now();
+  if (!force) {
+    if (shouldSkipHydrate()) return;
+    if (state._lastRehydrateAt && (now - state._lastRehydrateAt) < REHYDRATE_MIN_INTERVAL_MS) return;
+  }
+
+  state._lastRehydrateAt = now;
+  state._rehydrateRequested = true;
+  state._rehydrateRequestedVersion = state.catalogVersion ?? null;
+
   wsSend({ type:'REQUEST_SNAPSHOT' });
   wsSend({ type:'REQUEST_CATALOG' });
-  wsSend({ type:'LOBBY_SNAPSHOT' });
 }
+
+export function ensureHydrateRequest(options = {}){
+  requestRehydrate(options);
+}
+
 function scheduleRehydrate(ms=900){
   if (state._rehydrateTimer) clearTimeout(state._rehydrateTimer);
   state._rehydrateTimer = setTimeout(()=>{
-    const empty = !state.els.charGrid || state.els.charGrid.children.length === 0;
-    requestRehydrate();
-    if (empty) setTimeout(()=>{ if (!state.els.charGrid || state.els.charGrid.children.length === 0) requestRehydrate(); }, 1500);
+    state._rehydrateTimer = 0;
+    try { _onSocketMessage({ type: 'WS_RETRY' }); } catch (_) {}
   }, ms);
 }
 
@@ -98,6 +143,12 @@ export function connectWs(){
     state.shouldReconnect = false;
     return;
   }
+
+  state.hydrated = false;
+  state._hydratedVersion = null;
+  state._rehydrateRequested = false;
+  state._rehydrateRequestedVersion = null;
+  if (state._rehydrateTimer) { clearTimeout(state._rehydrateTimer); state._rehydrateTimer = 0; }
 
   try { if (state.ws) { try { state.ws.close(); } catch {} } } catch {}
   const sock = new WebSocket(buildWsUrl());
@@ -135,7 +186,9 @@ export function connectWs(){
       showToast('Room not found or expired.');
     }, 12000);
 
-    scheduleRehydrate(300);
+    setTimeout(() => {
+      try { _onSocketMessage({ type: 'WS_OPEN' }); } catch (_) {}
+    }, 300);
   };
 
   sock.onmessage = async (ev) => {
@@ -205,4 +258,4 @@ function endSession(reason='Disconnected'){
 }
 
 // console helper
-if (typeof window !== 'undefined') window.dpRehydrate = () => requestRehydrate();
+if (typeof window !== 'undefined') window.dpRehydrate = (force = true) => requestRehydrate({ force });
