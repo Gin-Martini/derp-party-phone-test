@@ -181,23 +181,24 @@ function selectCharacter(charId, btn){
 // --- in renderCatalog(entries), add the empty-tick guard right after list normalization ---
 export function renderCatalog(entries) {
   const list = normalizeEntries(entries);
+  const grid = state.els.charGrid;
+  const hasExistingGrid = !!(grid && grid.children && grid.children.length);
 
-  if ((!list || list.length === 0) && grid.children && grid.children.length) {
+  if ((!list || list.length === 0) && hasExistingGrid) {
     setDbg('catalog: ignore empty tick');
     return;
   }
-    
+
   if (!state.catalog) state.catalog = { entries: [] };
   state.catalog.entries = list;
   state._pendingCatalog = list;
 
-  const grid = state.els.charGrid;
   if (!grid) return;
 
   attachCatalogHandlers();
 
   // NEW: ignore transient empty ticks to prevent flicker
-  if ((!list || list.length === 0) && grid.children && grid.children.length) {
+  if ((!list || list.length === 0) && hasExistingGrid) {
     setDbg('catalog: ignore empty tick');
     return;
   }
