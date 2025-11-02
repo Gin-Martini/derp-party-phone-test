@@ -3,7 +3,32 @@ import { state } from './state.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
 import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
+import { wsSend, setOnSocketMessage, ensureHydrateRequest } from './ws.js?v=11.0.12';
+
+// ---------------------------------------------------------------------------
+// Hydration + dedupe guards
+// ---------------------------------------------------------------------------
+const HYDRATE_KICK_DELAY_MS = 320;
+const HYDRATE_RETRY_DELAY_MS = 6200;
+const MESSAGE_CACHE_LIMIT = 240;
+
+let hydrateKickTimer = 0;
+let hydrateRetryTimer = 0;
+let hydrateRequestCount = 0;
+let lastHydrateVersion = null;
+
+const seenMessages = new Map();
+let lastLobbyVisible = false;
+let lastPhaseValue = state.phase || '';
+let rollOverlayVisible = false;
+
+function maybeSetPhase(next) {
+  if (!next) return;
+  const clean = String(next);
+  if (lastPhaseValue === clean) return;
+  lastPhaseValue = clean;
+  setPhase(clean);
+}
 
 // ---------------------------------------------------------------------------
 // Hydration + dedupe guards
@@ -794,6 +819,7 @@ async function onSocketMessage(msg) {
         if (entries) {
           applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: version ?? payload?.version ?? raw.version, debounce: false });
         }
+        markHydrated();
         return;
       }
 
