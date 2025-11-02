@@ -1,5 +1,8 @@
 import { state } from './state.js?v=11.0.12';
 
+// Safe to import because rollOverlay.js doesn't depend on ui.js, so no cycle.
+import { hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
+
 // DOM helpers + visual utilities (status, toast, log, etc.)
 export function initUi() {
   const $ = (id)=>document.getElementById(id);
@@ -91,7 +94,34 @@ export function setStatus(text, pill=false){
   el.classList.toggle('pill', pill);
 }
 
-export function setLobbyVisible(on){ state.els.lobbyArea?.classList.toggle('hidden', !on); }
+export function setLobbyVisible(on){
+  state.els.lobbyArea?.classList.toggle('hidden', !on);
+  if (!on) return;
+
+  // When we re-enter the lobby, make sure the roll overlay is fully reset so it
+  // doesn't cover the character grid during reconnects / snapshots.
+  hideRollOverlay();
+  state.inTurnOrder = false;
+  state.canRollNow = false;
+  state.myHasRolled = false;
+
+  const { rollBtn, rollState, rollValue, orderResult } = state.els;
+  if (rollBtn) {
+    rollBtn.disabled = true;
+    rollBtn.classList.add('btn-disabled');
+    rollBtn.style.display = 'none';
+  }
+  if (rollState) {
+    rollState.textContent = 'Waiting…';
+    rollState.classList.remove('ok');
+    rollState.classList.add('no');
+  }
+  if (rollValue) rollValue.textContent = '—';
+  if (orderResult) {
+    orderResult.textContent = '';
+    orderResult.classList.add('hidden');
+  }
+}
 
 export function setReadyPill(on){
   const p = state.els.readyPill; if (!p) return;
