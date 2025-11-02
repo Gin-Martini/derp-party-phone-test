@@ -8,13 +8,21 @@ import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
 const U = (s) => String(s || '').toUpperCase();
+
 const normType = (t) => {
   const s = U(t);
   if (!s) return 'TEXT';
+
+  // Accept real state shapes
   if (s.includes('BROADCAST_STATE') || s === 'STATE' || s.includes('STATEENVELOPE')) return 'STATE';
-  if (s.includes('CATALOG') && s.includes('PATCH')) return 'CHARACTER_CATALOG_PATCH';
-  if (s.includes('CATALOG')) return 'CHARACTER_CATALOG';
+
+  // Only treat as character-catalog if the token itself indicates CHARACTER
+  if (/^(CHAR(ACTER)?_)?CATALOG_?PATCH$/.test(s)) return 'CHARACTER_CATALOG_PATCH';
+  if (/^(CHAR(ACTER)?_)?CATALOG$/.test(s))          return 'CHARACTER_CATALOG';
+
+  // HELLO-ish signals
   if (s === 'HELLO_OK' || s === 'WELCOME' || s === 'ROOM_OPEN' || s === 'PONG') return 'HELLO';
+
   return s;
 };
 
@@ -459,6 +467,10 @@ function applyCatalogSnapshot(entries, { force = false } = {}) {
   const explicit = entries !== undefined && entries !== null;
   const nextList = Array.isArray(entries) ? entries : [];
 
+  // NEW: if someone forced us with an empty list, ignore (prevents “blink to empty”)
+  if (force && explicit && nextList.length === 0) return false;
+
+  // unchanged/no-op protections
   if (!force && currentCount && !explicit) return false;
 
   if (!force && currentCount && nextList.length === 0 && explicit) {
@@ -474,6 +486,7 @@ function applyCatalogSnapshot(entries, { force = false } = {}) {
     });
     if (unchanged) return false;
   }
+
   ensureLobbyShown();
   renderCatalog(nextList);
   return true;
@@ -525,22 +538,27 @@ export async function onSocketMessage(msg){
         return;
       }
 
-      case 'CHARACTER_CATALOG': {
-        const p = raw.payload || raw.data || raw;
-        let entries = Array.isArray(p.entries)
-          ? p.entries
-          : Array.isArray(p.list)
-            ? p.list
-            : Array.isArray(p.characters)
-              ? p.characters
-              : [];
-        if (!entries.length) {
-          const fallback = extractCatalogEntries(p);
-          if (Array.isArray(fallback)) entries = fallback;
-        }
-        applyCatalogSnapshot(entries, { force: true });
-        return;
-      }
+case 'CHARACTER_CATALOG': {
+  const p = raw.payload || raw.data || raw;
+
+  // Try all known shapes
+  let entries = Array.isArray(p?.entries) ? p.entries
+              : Array.isArray(p?.list)     ? p.list
+              : Array.isArray(p?.characters) ? p.characters
+              : undefined;
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    const fallback = extractCatalogEntries(p);
+    if (Array.isArray(fallback) && fallback.length) entries = fallback;
+  }
+
+  // NEW: Only apply if we actually have entries; otherwise ignore (prevents wipe)
+  if (Array.isArray(entries) && entries.length) {
+    applyCatalogSnapshot(entries, { force: true });
+  }
+  return;
+}
+
 
       case 'STATE': {
         const env = raw.envelope || raw.state || raw;
