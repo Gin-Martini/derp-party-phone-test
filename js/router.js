@@ -4,6 +4,7 @@ import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11
 import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
 import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
 import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
+
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
@@ -28,6 +29,31 @@ const normType = (t) => {
 
 const PLAYER_LABEL_KEYS = ['name','displayName','playerName','label','nickname','handle','title'];
 const ORDER_KEYS = ['order','turnOrder','turn_order','orderedPlayers','playerOrder','players','finalOrder','sequence','results','rolls','list'];
+
+// Merge a shallow state payload into our local state
+function mergeState(s) {
+  if (!s) return;
+  Object.assign(state, s);
+  if (s.phase) setPhase(s.phase);
+  // If a catalog came with state, render it
+  const cat = s.catalog || s.lobby?.catalog;
+  if (cat && Array.isArray(cat.entries) && cat.entries.length) {
+    setLobbyVisible(true);
+    renderCatalog(cat);
+    state.hydrated = true;
+  }
+}
+
+// Some hosts send catalog as its own message
+function handleCatalogMessage(msg) {
+  const cat = msg.catalog || msg.data?.catalog || msg.payload?.catalog;
+  if (cat && Array.isArray(cat.entries) && cat.entries.length) {
+    state.catalog = cat;
+    setLobbyVisible(true);
+    renderCatalog(cat);
+    state.hydrated = true;
+  }
+}
 
 function toPlayerLabel(entry) {
   if (entry == null) return '';
@@ -254,6 +280,7 @@ function handleTurnOrderSnapshot(snapshot, { typeHint = '' } = {}) {
     const msg = statusText || messageText || 'Order set.';
     if (text) updateRollUI({ orderText: text, msg, ok: true });
     else updateRollUI({ msg, ok: true });
+    hideRollOverlay();
     return true;
   }
 
@@ -511,6 +538,12 @@ export async function onSocketMessage(msg){
     if (raw instanceof Blob) raw = await raw.text();
     else if (raw instanceof ArrayBuffer) raw = new TextDecoder().decode(raw);
 
+    // Allow batch arrays
+    if (Array.isArray(raw)) {
+      for (const item of raw) await onSocketMessage(item);
+      return;
+    }
+
     if (typeof raw === 'string') {
       const s = raw.trim();
       if (s.startsWith('{') || s.startsWith('[')) {
@@ -538,27 +571,37 @@ export async function onSocketMessage(msg){
         return;
       }
 
-case 'CHARACTER_CATALOG': {
-  const p = raw.payload || raw.data || raw;
+      case 'CHARACTER_CATALOG': {
+        const p = raw.payload || raw.data || raw;
 
-  // Try all known shapes
-  let entries = Array.isArray(p?.entries) ? p.entries
-              : Array.isArray(p?.list)     ? p.list
-              : Array.isArray(p?.characters) ? p.characters
-              : undefined;
+        // Try all known shapes
+        let entries = Array.isArray(p?.entries) ? p.entries
+                    : Array.isArray(p?.list)     ? p.list
+                    : Array.isArray(p?.characters) ? p.characters
+                    : undefined;
 
-  if (!Array.isArray(entries) || entries.length === 0) {
-    const fallback = extractCatalogEntries(p);
-    if (Array.isArray(fallback) && fallback.length) entries = fallback;
-  }
+        if (!Array.isArray(entries) || entries.length === 0) {
+          const fallback = extractCatalogEntries(p);
+          if (Array.isArray(fallback) && fallback.length) entries = fallback;
+        }
 
-  // NEW: Only apply if we actually have entries; otherwise ignore (prevents wipe)
-  if (Array.isArray(entries) && entries.length) {
-    applyCatalogSnapshot(entries, { force: true });
-  }
-  return;
-}
+        // Only apply if we actually have entries; otherwise ignore (prevents wipe)
+        if (Array.isArray(entries) && entries.length) {
+          applyCatalogSnapshot(entries, { force: true });
+        }
+        return;
+      }
 
+      case 'CHARACTER_CATALOG_PATCH': {
+        const pack = raw.payload || raw.data || raw;
+        const trip = findPatchTriplet(pack);
+        if (trip) {
+          if (!state.catalog) state.catalog = { entries: [] };
+          applyCatalogPatch(trip);
+          applyCatalogSnapshot(state.catalog.entries, { force: true });
+        }
+        return;
+      }
 
       case 'STATE': {
         const env = raw.envelope || raw.state || raw;
@@ -644,6 +687,7 @@ case 'CHARACTER_CATALOG': {
         state.canRollNow = false;
         if (text) updateRollUI({ orderText: text, msg: 'Order set.', ok: true });
         else updateRollUI({ msg: 'Order set.', ok: true });
+        hideRollOverlay();
         return;
       }
 
@@ -652,6 +696,7 @@ case 'CHARACTER_CATALOG': {
         const playerId = raw.playerId || raw.id || raw.socketId;
         const mine = !!playerId && String(playerId) === String(state.playerId || '');
         setPhase('board');
+        state.inTurnOrder = false;
         state.canRollNow = mine;
         state.myHasRolled = false;
         if (mine) {
@@ -674,6 +719,9 @@ case 'CHARACTER_CATALOG': {
           if (value != null) updateRollUI({ value, msg: 'Moving…', ok: true });
           else updateRollUI({ msg: 'Moving…', ok: true });
           hideRollOverlay();
+        } else {
+          const who = raw.name || raw.displayName || 'Player';
+          if (value != null) updateRollUI({ msg: `${who} rolled ${value}.` });
         }
         return;
       }
