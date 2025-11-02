@@ -24,7 +24,7 @@ function isTerminalClose(ev){
 let _onSocketMessage = () => {};
 let _boundRouterHandler = null;
 export function setOnSocketMessage(fn){
-  const handler = fn || (()=>{});
+  const handler = typeof fn === 'function' ? fn : () => {};
   if (_boundRouterHandler === handler) return;
   _boundRouterHandler = handler;
   _onSocketMessage = handler;

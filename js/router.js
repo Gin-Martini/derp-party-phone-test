@@ -1,4 +1,4 @@
-// js/router.js — hydration-guarded client router (full file)
+// js/router.js — hydration-aware client router (full file replacement)
 import { state } from './state.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
@@ -30,6 +30,32 @@ function maybeSetPhase(next) {
   setPhase(clean);
 }
 
+// ---------------------------------------------------------------------------
+// Hydration + dedupe guards
+// ---------------------------------------------------------------------------
+const HYDRATE_KICK_DELAY_MS = 320;
+const HYDRATE_RETRY_DELAY_MS = 6200;
+const MESSAGE_CACHE_LIMIT = 240;
+const CATALOG_RENDER_DEBOUNCE_MS = 140;
+
+let hydrateKickTimer = 0;
+let hydrateRetryTimer = 0;
+let hydrateAttempts = 0;
+let catalogRenderTimer = 0;
+
+const seenMessages = new Map();
+let lastLobbyVisible = false;
+let lastPhaseValue = state.phase || '';
+let rollOverlayVisible = false;
+
+function maybeSetPhase(next) {
+  if (!next) return;
+  const clean = String(next);
+  if (lastPhaseValue === clean) return;
+  lastPhaseValue = clean;
+  setPhase(clean);
+}
+
 function maybeSetLobbyVisible(on) {
   const flag = !!on;
   if (lastLobbyVisible === flag) return;
@@ -37,10 +63,10 @@ function maybeSetLobbyVisible(on) {
   setLobbyVisible(flag);
 }
 
-const ensureLobbyShown = () => {
+function ensureLobbyShown() {
   maybeSetLobbyVisible(true);
   maybeSetPhase('lobby');
-};
+}
 
 function cancelHydrateRetry() {
   if (hydrateRetryTimer) {
@@ -51,22 +77,22 @@ function cancelHydrateRetry() {
 
 function resetHydrationTracking({ keepVersion = false } = {}) {
   state.hydrated = false;
-  state._hydratedVersion = keepVersion ? state._hydratedVersion ?? null : null;
+  if (!keepVersion) state._hydratedVersion = null;
   state._rehydrateRequested = false;
   state._rehydrateRequestedVersion = null;
   state._lastRehydrateAt = 0;
+  hydrateAttempts = 0;
   if (hydrateKickTimer) {
     clearTimeout(hydrateKickTimer);
     hydrateKickTimer = 0;
   }
   cancelHydrateRetry();
-  hydrateRequestCount = 0;
-  if (!keepVersion) lastHydrateVersion = null;
 }
 
-function markHydrated() {
+function markHydrated({ version = null } = {}) {
   state.hydrated = true;
-  state._hydratedVersion = state.catalogVersion ?? state._hydratedVersion ?? lastHydrateVersion ?? null;
+  const normalized = version || state.catalogVersion || null;
+  if (normalized) state._hydratedVersion = normalized;
   state._rehydrateRequested = false;
   state._rehydrateRequestedVersion = null;
   cancelHydrateRetry();
@@ -74,37 +100,38 @@ function markHydrated() {
     clearTimeout(hydrateKickTimer);
     hydrateKickTimer = 0;
   }
-  hydrateRequestCount = 0;
+  hydrateAttempts = 0;
 }
 
-function requestHydrateOnce(reason = 'kick') {
+function requestHydrateBurst(reason = 'kick') {
   const knownVersion = state.catalogVersion ?? null;
   if (state.hydrated && (!knownVersion || state._hydratedVersion === knownVersion)) return;
-  if (hydrateRequestCount >= 2 && (!knownVersion || lastHydrateVersion === knownVersion)) return;
+  if (hydrateAttempts >= 2) return;
 
-  wsSend({ type: 'REQUEST_SNAPSHOT' });
-  wsSend({ type: 'REQUEST_CATALOG' });
-
-  hydrateRequestCount += 1;
-  lastHydrateVersion = knownVersion;
+  hydrateAttempts += 1;
   state._rehydrateRequested = true;
   state._rehydrateRequestedVersion = knownVersion;
   state._lastRehydrateAt = Date.now();
 
-  if (hydrateRequestCount === 1) {
+  wsSend({ type: 'REQUEST_SNAPSHOT', reason });
+  wsSend({ type: 'REQUEST_CATALOG', reason });
+
+  if (hydrateAttempts === 1) {
     cancelHydrateRetry();
     hydrateRetryTimer = setTimeout(() => {
       hydrateRetryTimer = 0;
-      if (!state.hydrated) requestHydrateOnce('retry');
+      if (!state.hydrated) requestHydrateBurst('retry-timeout');
     }, HYDRATE_RETRY_DELAY_MS);
   }
 }
 
 function scheduleHydrateKick(delay = HYDRATE_KICK_DELAY_MS) {
-  if (hydrateKickTimer) clearTimeout(hydrateKickTimer);
+  if (state.hydrated) return;
+  if (hydrateAttempts > 0) return;
+  if (hydrateKickTimer) return;
   hydrateKickTimer = setTimeout(() => {
     hydrateKickTimer = 0;
-    requestHydrateOnce('kick');
+    requestHydrateBurst('kick');
   }, delay);
 }
 
@@ -129,8 +156,8 @@ function buildMessageKey(raw) {
       const re = range.end ?? range.to ?? range.finish ?? range[1];
       if (rs !== undefined || re !== undefined) return `${type}|patch:${rs ?? ''}-${re ?? ''}`;
     }
-    const trip = source.patchIds ?? source.ids;
-    if (Array.isArray(trip) && trip.length) return `${type}|patchIds:${trip.join(',')}`;
+    const ids = source.patchIds ?? source.ids;
+    if (Array.isArray(ids) && ids.length) return `${type}|patchIds:${ids.join(',')}`;
   }
   return null;
 }
@@ -149,9 +176,60 @@ function shouldProcessMessage(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// Catalog fingerprint helpers
+// Catalog fingerprint + guard helpers
 // ---------------------------------------------------------------------------
 const VERSION_KEY_HINTS = ['catalogVersion', 'catalog_version'];
+const PORTRAIT_VALUE_KEYS = [
+  'portraitUrl', 'portraitData', 'imageUrl', 'portrait', 'portrait_url', 'portrait_data',
+  'thumbnailUrl', 'thumbUrl', 'thumb', 'avatarUrl', 'avatar'
+];
+const PLAYER_HINT_KEYS = [
+  'playerId', 'player_id', 'alias', 'joinedAt', 'joined_at', 'ready', 'isReady', 'seat', 'slot',
+  'position', 'connectionId', 'wsId', 'role', 'team', 'score', 'latency', 'ping', 'isHost'
+];
+
+function valueHasPortrait(value) {
+  if (!value) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'object') {
+    if (Array.isArray(value)) return value.some((item) => valueHasPortrait(item));
+    const keys = ['url', 'data', 'imageUrl', 'src'];
+    return keys.some((k) => valueHasPortrait(value[k]));
+  }
+  return false;
+}
+
+function hasPortraitCandidate(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  for (const key of PORTRAIT_VALUE_KEYS) {
+    if (valueHasPortrait(entry[key])) return true;
+  }
+  if (entry.raw && typeof entry.raw === 'object') {
+    for (const key of PORTRAIT_VALUE_KEYS) {
+      if (valueHasPortrait(entry.raw[key])) return true;
+    }
+  }
+  return false;
+}
+
+function looksLikePlayerWithoutPortrait(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (hasPortraitCandidate(entry)) return false;
+  const source = entry.raw && typeof entry.raw === 'object' ? entry.raw : entry;
+  return PLAYER_HINT_KEYS.some((key) => {
+    const value = source[key];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+}
+
+function passesCatalogGuard(entries) {
+  if (!Array.isArray(entries) || !entries.length) return false;
+  const objects = entries.filter((item) => item && typeof item === 'object');
+  if (!objects.length) return false;
+  if (!objects.some((item) => hasPortraitCandidate(item))) return false;
+  if (objects.every((item) => looksLikePlayerWithoutPortrait(item))) return false;
+  return true;
+}
 
 function toCatalogVersion(value) {
   if (value === null || value === undefined) return null;
@@ -209,8 +287,7 @@ function noteCatalogVersion(...sources) {
         state.hydrated = false;
         state._rehydrateRequested = false;
         state._rehydrateRequestedVersion = null;
-        hydrateRequestCount = 0;
-        lastHydrateVersion = null;
+        hydrateAttempts = 0;
         cancelHydrateRetry();
       }
     }
@@ -244,8 +321,9 @@ function buildCatalogSignature(entries, options) {
   const list = Array.isArray(entries) ? entries : [];
   const head = list.slice(0, 8).map((entry) => {
     if (!entry || typeof entry !== 'object') return '';
-    const id = entry.id ?? entry.characterId ?? entry.key ?? entry.slug ?? '';
-    const label = entry.label ?? entry.name ?? entry.title ?? '';
+    const raw = entry.raw && typeof entry.raw === 'object' ? entry.raw : entry;
+    const id = raw.id ?? raw.characterId ?? raw.key ?? raw.slug ?? entry.id ?? '';
+    const label = raw.label ?? raw.name ?? raw.title ?? entry.label ?? '';
     return `${id}:${label}`;
   }).join('|');
   const optionSig = stableOptionSignature(options);
@@ -253,7 +331,7 @@ function buildCatalogSignature(entries, options) {
 }
 
 // ---------------------------------------------------------------------------
-// Roll snapshot helpers (borrowed from legacy router)
+// Roll snapshot helpers
 // ---------------------------------------------------------------------------
 const PLAYER_LABEL_KEYS = ['name','displayName','playerName','label','nickname','handle','title'];
 const ORDER_KEYS = ['order','turnOrder','turn_order','orderedPlayers','playerOrder','players','finalOrder','sequence','results','rolls','list'];
@@ -262,7 +340,7 @@ function toPlayerLabel(entry) {
   if (entry == null) return '';
   if (typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'bigint') return String(entry);
   if (Array.isArray(entry)) {
-    if (entry.length === 0) return '';
+    if (!entry.length) return '';
     if (entry.length === 1) return toPlayerLabel(entry[0]);
     return toPlayerLabel(entry[1] ?? entry[0]);
   }
@@ -280,7 +358,7 @@ function toPlayerLabel(entry) {
 function toPlayerId(entry) {
   if (entry == null) return null;
   if (Array.isArray(entry)) {
-    if (entry.length === 0) return null;
+    if (!entry.length) return null;
     if (entry.length === 1) return toPlayerId(entry[0]);
     const [, value] = entry;
     const nested = toPlayerId(value);
@@ -315,7 +393,7 @@ function toRollNumber(value) {
 function extractRollValue(entry) {
   if (entry == null) return null;
   if (Array.isArray(entry)) {
-    if (entry.length === 0) return null;
+    if (!entry.length) return null;
     if (entry.length === 1) return extractRollValue(entry[0]);
     const second = extractRollValue(entry[1]);
     if (second != null) return second;
@@ -441,7 +519,7 @@ function buildLobbySignature(snapshot, catalogEntries) {
 }
 
 function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
-  const shouldShow = (!!state.canRollNow || !!state.inTurnOrder) && !state.myHasRolled;
+  const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
   if (shouldShow) {
     if (!rollOverlayVisible) {
       showRollOverlay();
@@ -451,7 +529,7 @@ function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
   } else if (rollOverlayVisible) {
     hideRollOverlay();
     rollOverlayVisible = false;
-  } else if (immediateUpdate) {
+  } else if (immediateUpdate && rollOverlayVisible) {
     updateRollUI();
   }
 }
@@ -470,18 +548,20 @@ function applyCatalogPatch(trip) {
   const list = state.catalog.entries;
   if (Array.isArray(trip.add)) {
     for (const e of trip.add) {
-      const id = String(e?.id ?? e?.characterId ?? e?.key ?? Math.random());
+      const raw = e && typeof e === 'object' ? e : {};
+      const id = String(raw.id ?? raw.characterId ?? raw.key ?? Math.random());
       const i = list.findIndex((x) => String(x.id) === id);
-      if (i >= 0) list[i] = { ...list[i], ...e, id };
-      else list.push({ ...e, id });
+      if (i >= 0) list[i] = { ...list[i], ...raw, id };
+      else list.push({ ...raw, id });
     }
   }
   if (Array.isArray(trip.update)) {
     for (const e of trip.update) {
-      const id = String(e?.id ?? e?.characterId ?? e?.key ?? '');
+      const raw = e && typeof e === 'object' ? e : {};
+      const id = String(raw.id ?? raw.characterId ?? raw.key ?? '');
       if (!id) continue;
       const i = list.findIndex((x) => String(x.id) === id);
-      if (i >= 0) list[i] = { ...list[i], ...e, id };
+      if (i >= 0) list[i] = { ...list[i], ...raw, id };
     }
   }
   if (Array.isArray(trip.remove)) {
@@ -490,6 +570,72 @@ function applyCatalogPatch(trip) {
     for (const e of list) if (!removes.includes(String(e.id))) keep.push(e);
     state.catalog.entries = keep;
   }
+}
+
+function commitCatalogRender(list, { debounce = false } = {}) {
+  const doRender = () => {
+    renderCatalog(list);
+    if (rollOverlayVisible) updateRollUI();
+  };
+
+  if (debounce) {
+    if (catalogRenderTimer) clearTimeout(catalogRenderTimer);
+    catalogRenderTimer = setTimeout(() => {
+      catalogRenderTimer = 0;
+      doRender();
+    }, CATALOG_RENDER_DEBOUNCE_MS);
+  } else {
+    if (catalogRenderTimer) {
+      clearTimeout(catalogRenderTimer);
+      catalogRenderTimer = 0;
+    }
+    doRender();
+  }
+}
+
+function applyCatalogSnapshot(entries, { options = null, force = false, version = null, debounce = false } = {}) {
+  ensureCatalogContainer();
+  const nextList = Array.isArray(entries) ? entries : [];
+
+  if (nextList.length && !passesCatalogGuard(nextList)) return false;
+  if (force && nextList.length === 0 && state.catalog.entries.length) {
+    state.catalog.entries = [];
+    state._pendingCatalog = [];
+    state.catalogFingerprint = '';
+    commitCatalogRender([], { debounce: false });
+    markHydrated({ version: null });
+    return true;
+  }
+
+  const nextSignature = buildCatalogSignature(nextList, options);
+  if (!force && state.catalogFingerprint && state.catalogFingerprint === nextSignature) {
+    markHydrated({ version: state.catalogVersion });
+    return false;
+  }
+
+  state.catalog.entries = nextList;
+  state._pendingCatalog = nextList;
+  state.catalogFingerprint = nextSignature;
+
+  const stubLobby = { roomId: state.roomId, phase: lastPhaseValue || state.phase || '', players: Array.from({ length: state._lastPlayerCount || 0 }) };
+  const derivedSignature = buildLobbySignature(stubLobby, nextList);
+  if (derivedSignature) state._lobbySignature = derivedSignature;
+
+  if (nextList.length) {
+    commitCatalogRender(nextList, { debounce });
+    maybeSetLobbyVisible(true);
+  }
+
+  if (version) {
+    const normalized = toCatalogVersion(version);
+    if (normalized) {
+      state.catalogVersion = normalized;
+      state._hydratedVersion = normalized;
+    }
+  }
+
+  markHydrated({ version: state.catalogVersion });
+  return true;
 }
 
 function findPatchTriplet(root) {
@@ -508,55 +654,24 @@ function findPatchTriplet(root) {
   return null;
 }
 
-function applyCatalogSnapshot(entries, { options = null, force = false, version = null } = {}) {
-  ensureCatalogContainer();
-  const nextList = Array.isArray(entries) ? entries : [];
-
-  if (force && nextList.length === 0 && state.catalog.entries.length) return false;
-
-  const nextSignature = buildCatalogSignature(nextList, options);
-  if (!force && state.catalogFingerprint && state.catalogFingerprint === nextSignature) return false;
-
-  state.catalog.entries = nextList;
-  state._pendingCatalog = nextList;
-  state.catalogFingerprint = nextSignature;
-
-  const stubLobby = { roomId: state.roomId, phase: lastPhaseValue || state.phase || '', players: Array.from({ length: state._lastPlayerCount || 0 }) };
-  const derivedSignature = buildLobbySignature(stubLobby, nextList);
-  if (derivedSignature) state._lobbySignature = derivedSignature;
-
-  if (nextList.length) {
-    renderCatalog(nextList);
-    maybeSetLobbyVisible(true);
-    markHydrated();
+function pickCatalogEntries(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  let entries = Array.isArray(payload.entries) ? payload.entries
+    : Array.isArray(payload.list) ? payload.list
+    : Array.isArray(payload.characters) ? payload.characters
+    : undefined;
+  if (!Array.isArray(entries) || !entries.length) {
+    const extracted = extractCatalogEntries(payload);
+    if (Array.isArray(extracted) && extracted.length) entries = extracted;
   }
-
-  if (version) {
-    const normalized = toCatalogVersion(version);
-    if (normalized) {
-      state.catalogVersion = normalized;
-      state._hydratedVersion = normalized;
-    }
-  }
-
-  return true;
-}
-
-function tryConsumeCatalog(raw, { version = null, force = false } = {}) {
-  if (!raw || typeof raw !== 'object') return false;
-  const payload = raw.payload || raw.data || raw.catalog || raw.body || raw;
-  const entries = extractCatalogEntries(payload);
-  if (Array.isArray(entries) && entries.length) {
-    noteCatalogVersion(payload, raw);
-    return applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force, version: version ?? payload?.version });
-  }
-  return false;
+  if (Array.isArray(entries) && entries.length && passesCatalogGuard(entries)) return entries;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
 // Snapshot / lobby handling
 // ---------------------------------------------------------------------------
-function mergeState(snapshot) {
+function mergeState(snapshot, { debounceCatalog = false } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return;
   Object.assign(state, snapshot);
   if (snapshot.phase) maybeSetPhase(snapshot.phase);
@@ -564,9 +679,9 @@ function mergeState(snapshot) {
   if (snapshot.playerId) state.playerId = snapshot.playerId;
 
   const catalog = snapshot.catalog || snapshot.lobby?.catalog;
-  if (catalog && Array.isArray(catalog.entries) && catalog.entries.length) {
+  if (catalog && Array.isArray(catalog.entries) && catalog.entries.length && passesCatalogGuard(catalog.entries)) {
     noteCatalogVersion(catalog, snapshot);
-    applyCatalogSnapshot(catalog.entries, { options: catalog.options ?? catalog.meta ?? null, force: true, version: catalog.version ?? snapshot.version ?? null });
+    applyCatalogSnapshot(catalog.entries, { options: catalog.options ?? catalog.meta ?? null, force: true, version: catalog.version ?? snapshot.version ?? null, debounce: debounceCatalog });
   }
 
   const pendingEntries = Array.isArray(catalog?.entries) ? catalog.entries : Array.isArray(state.catalog?.entries) ? state.catalog.entries : null;
@@ -581,7 +696,7 @@ function mergeState(snapshot) {
   }
   state._lastPlayerCount = playerCount;
 
-  markHydrated();
+  markHydrated({ version: state.catalogVersion });
 }
 
 function handleTurnOrderSnapshot(raw) {
@@ -676,12 +791,12 @@ async function onSocketMessage(msg) {
     const type = normType(raw.type || raw.msgType || raw.kind);
 
     if (type === 'WS_OPEN') {
-      resetHydrationTracking();
+      resetHydrationTracking({ keepVersion: true });
       scheduleHydrateKick();
       return;
     }
     if (type === 'WS_RETRY') {
-      requestHydrateOnce('retry');
+      requestHydrateBurst('retry-signal');
       return;
     }
 
@@ -700,16 +815,9 @@ async function onSocketMessage(msg) {
       case 'CHARACTER_CATALOG': {
         const payload = raw.payload || raw.data || raw;
         const version = noteCatalogVersion(payload, raw);
-        let entries = Array.isArray(payload?.entries) ? payload.entries
-                  : Array.isArray(payload?.list) ? payload.list
-                  : Array.isArray(payload?.characters) ? payload.characters
-                  : undefined;
-        if (!Array.isArray(entries) || entries.length === 0) {
-          const fallback = extractCatalogEntries(payload);
-          if (Array.isArray(fallback) && fallback.length) entries = fallback;
-        }
-        if (Array.isArray(entries) && entries.length) {
-          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: version ?? payload?.version ?? raw.version });
+        const entries = pickCatalogEntries(payload);
+        if (entries) {
+          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: version ?? payload?.version ?? raw.version, debounce: false });
         }
         markHydrated();
         return;
@@ -720,11 +828,13 @@ async function onSocketMessage(msg) {
         if (trip) {
           applyCatalogPatch(trip);
           noteCatalogVersion(trip, raw);
-          applyCatalogSnapshot(state.catalog.entries, { options: raw.payload?.options ?? raw.payload?.meta, force: true, version: state.catalogVersion });
+          applyCatalogSnapshot(state.catalog.entries, { options: raw.payload?.options ?? raw.payload?.meta, force: true, version: state.catalogVersion, debounce: false });
         } else {
-          tryConsumeCatalog(raw, { force: false });
+          const payload = raw.payload || raw.data || raw;
+          const entries = pickCatalogEntries(payload);
+          if (entries) applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: state.catalogVersion, debounce: false });
         }
-        markHydrated();
+        markHydrated({ version: state.catalogVersion });
         return;
       }
 
@@ -732,29 +842,29 @@ async function onSocketMessage(msg) {
         const payload = raw.payload || raw.data || raw.body || raw.state || raw;
         if (payload && typeof payload === 'object') {
           if (payload.lobbySnapshot || payload.lobby_state) {
-            mergeState(payload.lobbySnapshot || payload.lobby_state);
+            mergeState(payload.lobbySnapshot || payload.lobby_state, { debounceCatalog: true });
           } else {
-            mergeState(payload.state || payload);
+            mergeState(payload.state || payload, { debounceCatalog: true });
           }
         }
         handleTurnOrderSnapshot(payload);
         handleBoardRollSnapshot(payload);
         updateRollOverlayVisibility({ immediateUpdate: true });
-        markHydrated();
+        markHydrated({ version: state.catalogVersion });
         return;
       }
 
       case 'LOBBY_SNAPSHOT': {
         const payload = raw.payload || raw.data || raw.body || raw.state || raw;
-        mergeState(payload);
+        mergeState(payload, { debounceCatalog: true });
         handleTurnOrderSnapshot(payload);
         updateRollOverlayVisibility({ immediateUpdate: true });
-        markHydrated();
+        markHydrated({ version: state.catalogVersion });
         return;
       }
 
       case 'TURN_ORDER_SNAPSHOT': {
-        if (handleTurnOrderSnapshot(raw.payload || raw.data || raw)) markHydrated();
+        if (handleTurnOrderSnapshot(raw.payload || raw.data || raw)) markHydrated({ version: state.catalogVersion });
         return;
       }
 
@@ -764,29 +874,21 @@ async function onSocketMessage(msg) {
       case 'ROLL_STATE': {
         const payload = raw.payload || raw.data || raw;
         handleBoardRollSnapshot(payload);
-        markHydrated();
+        markHydrated({ version: state.catalogVersion });
         return;
       }
 
       default: {
         const payload = raw.payload || raw.data || raw.body || raw;
-        if (!tryConsumeCatalog(raw, { force: false })) {
-          const version = noteCatalogVersion(payload, raw);
-          if (payload && Array.isArray(payload.entries)) {
-            applyCatalogSnapshot(payload.entries, { options: payload.options ?? payload.meta, force: true, version: version ?? payload.version });
-          } else {
-            const trip = findPatchTriplet(raw);
-            if (trip) {
-              applyCatalogPatch(trip);
-              noteCatalogVersion(trip, raw);
-              applyCatalogSnapshot(state.catalog.entries, { options: payload?.options ?? payload?.meta, force: true, version: state.catalogVersion });
-            }
-          }
+        const version = noteCatalogVersion(payload, raw);
+        const entries = pickCatalogEntries(payload);
+        if (entries) {
+          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: false, version: version ?? payload?.version ?? null, debounce: false });
         }
         handleTurnOrderSnapshot(payload);
         handleBoardRollSnapshot(payload);
         updateRollOverlayVisibility({ immediateUpdate: true });
-        markHydrated();
+        markHydrated({ version: state.catalogVersion });
         return;
       }
     }
