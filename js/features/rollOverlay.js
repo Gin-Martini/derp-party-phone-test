@@ -1,27 +1,104 @@
 import { state } from '../state.js?v=11.0.12';
+import { sendIntent, wsSend } from '../ws.js?v=11.0.12';
 
-export function allowRollButton(){
+function isBoardPhase(){
+  const phase = String(state.phase || '').toLowerCase();
+  return phase === 'board' || phase === 'in_game';
+}
+
+function allowRollButton(){
   if (state.phase === 'lobby') return false;
   if (state.inTurnOrder) return !state.myHasRolled;
-  return !!state.canRollNow;
+  return !!state.canRollNow && !state.myHasRolled;
 }
-export function updateRollUI(){
-  const b = state.els.rollBtn; if (!b) return;
+
+function applyRollButtonState(){
+  const btn = state.els.rollBtn;
+  if (!btn) return;
   const show = allowRollButton();
-  b.style.display = show ? 'inline-block' : 'none';
-  b.disabled = !show;
-  b.classList.toggle('btn-disabled', !show);
+  btn.style.display = show ? 'inline-block' : 'none';
+  btn.disabled = !show;
+  btn.classList.toggle('btn-disabled', !show);
 }
-export function showRollOverlay(title='Roll'){
-  const { rollPanel, rollTitle, rollValue, rollState } = state.els;
+
+function setText(el, value, { ok } = {}){
+  if (!el) return;
+  if (value !== undefined) el.textContent = value == null ? '' : String(value);
+  if (ok === undefined || !('classList' in el)) return;
+  if (ok) {
+    el.classList.add('ok');
+    el.classList.remove('no');
+  } else {
+    el.classList.remove('ok');
+    el.classList.add('no');
+  }
+}
+
+function ensureOrderResultVisible(hasText){
+  const order = state.els.orderResult;
+  if (!order) return;
+  order.classList.toggle('hidden', !hasText);
+}
+
+function onRollClick(e){
+  e?.preventDefault?.();
+  if (!allowRollButton()) return;
+
+  if (state.inTurnOrder && !state.myHasRolled) {
+    state.myHasRolled = true;
+    updateRollUI({ msg: 'Rolling…' });
+    sendIntent('PLAYER_ROLL');
+    wsSend({ type: 'PLAYER_ROLL' });
+    return;
+  }
+
+  if (isBoardPhase() && state.canRollNow && !state.myHasRolled) {
+    state.myHasRolled = true;
+    state.canRollNow = false;
+    updateRollUI({ msg: 'Rolling…' });
+    sendIntent('ROLL_MOVE');
+    wsSend({ type: 'ROLL_MOVE' });
+  }
+}
+
+export function wireRollButton(){
+  const btn = state.els.rollBtn;
+  if (!btn || btn._wired) return;
+  btn._wired = true;
+  btn.addEventListener('click', onRollClick, { passive: false });
+}
+
+export function updateRollUI({ value, msg, orderText, ok } = {}){
+  const { rollValue, rollState, orderResult } = state.els;
+  if (value !== undefined) setText(rollValue, value);
+  if (msg !== undefined) setText(rollState, msg, { ok });
+  if (orderText !== undefined) {
+    setText(orderResult, orderText, { ok: true });
+    ensureOrderResultVisible(!!orderText);
+  }
+  applyRollButtonState();
+}
+
+export function showRollOverlay({ title = 'Roll', prompt = 'Waiting…' } = {}){
+  const { rollPanel, rollTitle, rollValue, rollState, orderResult } = state.els;
   if (!rollPanel || !rollTitle || !rollValue || !rollState) return;
   if (state.phase === 'lobby') return;
+
   rollTitle.textContent = title;
-  rollValue.textContent = '—';
-  rollState.textContent = 'Waiting…';
-  rollState.classList.remove('ok'); rollState.classList.add('no');
-  rollPanel.classList.remove('hidden'); rollPanel.style.display = 'block';
-  updateRollUI();
-  setTimeout(()=>window.scrollTo(0,0), 0);
+  setText(rollState, prompt, { ok: false });
+  setText(rollValue, '—');
+  if (orderResult) {
+    orderResult.textContent = '';
+    ensureOrderResultVisible(false);
+  }
+  rollPanel.classList.remove('hidden');
+  rollPanel.style.display = 'block';
+  applyRollButtonState();
+  setTimeout(() => window.scrollTo(0, 0), 0);
 }
-export function hideRollOverlay(){ state.els.rollPanel?.classList.add('hidden'); }
+
+export function hideRollOverlay(){
+  const panel = state.els.rollPanel;
+  if (!panel) return;
+  panel.classList.add('hidden');
+}

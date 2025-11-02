@@ -2,6 +2,7 @@
 import { state } from './state.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
+import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
 import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
@@ -131,6 +132,8 @@ export async function onSocketMessage(msg){
         setStatus('Connected. Waiting for host...');
         hideJoinCard();
         ensureLobbyShown();
+        if (raw.playerId) state.playerId = raw.playerId;
+        if (raw.roomId) state.roomId = raw.roomId;
         // Ask host to rehydrate us
         wsSend && wsSend({ type: 'REQUEST_SNAPSHOT' });
         wsSend && wsSend({ type: 'REQUEST_CATALOG' });
@@ -200,6 +203,74 @@ export async function onSocketMessage(msg){
 
         if (tryConsumeCatalog(env, { force: false })) return;
 
+        return;
+      }
+
+      case 'TURN_ORDER_START': {
+        setPhase('turn_order');
+        state.inTurnOrder = true;
+        state.canRollNow = false;
+        state.myHasRolled = false;
+        showRollOverlay({ title: 'Turn Order', prompt: 'Tap ROLL to set the order.' });
+        updateRollUI();
+        return;
+      }
+
+      case 'TURN_ORDER_FEEDBACK': {
+        const rollValue = raw.roll ?? raw.value ?? raw.total;
+        const playerId = raw.playerId || raw.id || raw.socketId;
+        const mine = !!playerId && String(playerId) === String(state.playerId || '');
+        if (mine) state.myHasRolled = true;
+        const who = raw.name || raw.displayName || (mine ? 'You' : 'Player');
+        const msg = rollValue != null ? `${who} rolled ${rollValue}.` : `${who} rolled.`;
+        if (mine && rollValue != null) {
+          updateRollUI({ value: rollValue, msg, ok: true });
+        } else {
+          updateRollUI({ msg });
+        }
+        return;
+      }
+
+      case 'TURN_ORDER_FINAL': {
+        const order = Array.isArray(raw.order) ? raw.order : [];
+        const toLabel = (entry) => entry?.name || entry?.displayName || entry?.playerName || entry?.playerId || entry?.id || '';
+        const text = order.map(toLabel).filter(Boolean).join(' → ');
+        state.inTurnOrder = false;
+        state.myHasRolled = false;
+        state.canRollNow = false;
+        if (text) updateRollUI({ orderText: text, msg: 'Order set.', ok: true });
+        else updateRollUI({ msg: 'Order set.', ok: true });
+        return;
+      }
+
+      case 'YOUR_TURN':
+      case 'ROLL_PROMPT': {
+        const playerId = raw.playerId || raw.id || raw.socketId;
+        const mine = !!playerId && String(playerId) === String(state.playerId || '');
+        setPhase('board');
+        state.canRollNow = mine;
+        state.myHasRolled = false;
+        if (mine) {
+          showRollOverlay({ title: 'Your Turn', prompt: 'Tap ROLL to move.' });
+          updateRollUI();
+        } else {
+          hideRollOverlay();
+          updateRollUI();
+        }
+        return;
+      }
+
+      case 'MOVE_ROLL': {
+        const playerId = raw.playerId || raw.id || raw.socketId;
+        const mine = !!playerId && String(playerId) === String(state.playerId || '');
+        const value = raw.value ?? raw.roll ?? raw.steps;
+        if (mine) {
+          state.canRollNow = false;
+          state.myHasRolled = true;
+          if (value != null) updateRollUI({ value, msg: 'Moving…', ok: true });
+          else updateRollUI({ msg: 'Moving…', ok: true });
+          hideRollOverlay();
+        }
         return;
       }
 

@@ -46,6 +46,12 @@ export function wsSend(obj){
   try { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(obj)); } catch(_){}
 }
 
+export function sendIntent(intentType, payload = {}){
+  if (!intentType) return;
+  const msg = { type: 'INTENT', intent: intentType, kind: 'INTENT', ...payload };
+  wsSend(msg);
+}
+
 // reconnect control
 export function scheduleReconnect(reason){
   if (!state.shouldReconnect || !state.roomId || !state.playerId) return;

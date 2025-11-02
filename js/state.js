@@ -11,7 +11,7 @@ export const state = {
   // identity/session
   playerId: '',
   roomId: '',
-  phase: 'lobby', // 'lobby' | 'turn_order' | 'in_game'
+  phase: 'lobby', // 'lobby' | 'turn_order' | 'board'
   playerNameById: new Map(),
 
   // lobby/char select
