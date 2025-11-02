@@ -409,6 +409,10 @@ const PLAYER_HINT_KEYS = [
   'playerId', 'player_id', 'alias', 'joinedAt', 'joined_at', 'ready', 'isReady', 'seat', 'slot',
   'position', 'connectionId', 'wsId', 'role', 'team', 'score', 'latency', 'ping', 'isHost'
 ];
+const CHARACTER_NAME_HINT_KEYS = [
+  'label', 'name', 'title', 'displayName', 'display_name', 'character', 'characterName',
+  'character_name', 'hero', 'villain'
+];
 
 function valueHasPortrait(value) {
   if (!value) return false;
@@ -444,13 +448,24 @@ function looksLikePlayerWithoutPortrait(entry) {
   });
 }
 
+function hasCharacterName(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const source = entry.raw && typeof entry.raw === 'object' ? entry.raw : entry;
+  return CHARACTER_NAME_HINT_KEYS.some((key) => {
+    const value = source[key];
+    return value !== undefined && value !== null && String(value).trim() !== '';
+  });
+}
+
 function passesCatalogGuard(entries) {
   if (!Array.isArray(entries) || !entries.length) return false;
   const objects = entries.filter((item) => item && typeof item === 'object');
   if (!objects.length) return false;
-  if (!objects.some((item) => hasPortraitCandidate(item))) return false;
-  if (objects.every((item) => looksLikePlayerWithoutPortrait(item))) return false;
-  return true;
+  const hasPortrait = objects.some((item) => hasPortraitCandidate(item));
+  const allLookLikePlayers = objects.every((item) => looksLikePlayerWithoutPortrait(item));
+  if (allLookLikePlayers) return false;
+  if (hasPortrait) return true;
+  return objects.some((item) => hasCharacterName(item));
 }
 
 function toCatalogVersion(value) {
