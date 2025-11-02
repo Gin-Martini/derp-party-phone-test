@@ -1,11 +1,13 @@
-// js/router.js — header (deduped)
-import { state } from './state.js?v=11.0.12';
-import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
-import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
-import { wsSend, setOnSocketMessage, ensureHydrateRequest } from './ws.js?v=11.0.12';
+// js/router.js — FULL FILE (deduped, no HTML)
+import { state } from './state.js?v=11.0.13';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.13';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.13';
+import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.13';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.13';
 
-// Hydration + dedupe guards
+// ---------------------------------------------------------------------------
+// Hydration + dedupe guards (SINGLE COPY)
+// ---------------------------------------------------------------------------
 const HYDRATE_KICK_DELAY_MS = 320;
 const HYDRATE_RETRY_DELAY_MS = 6200;
 const MESSAGE_CACHE_LIMIT = 240;
@@ -29,33 +31,9 @@ function maybeSetPhase(next){
   setPhase(clean);
 }
 
-
 // ---------------------------------------------------------------------------
-// Hydration + dedupe guards
+// Small helpers formerly duplicated
 // ---------------------------------------------------------------------------
-const HYDRATE_KICK_DELAY_MS = 320;
-const HYDRATE_RETRY_DELAY_MS = 6200;
-const MESSAGE_CACHE_LIMIT = 240;
-const CATALOG_RENDER_DEBOUNCE_MS = 140;
-
-let hydrateKickTimer = 0;
-let hydrateRetryTimer = 0;
-let hydrateAttempts = 0;
-let catalogRenderTimer = 0;
-
-const seenMessages = new Map();
-let lastLobbyVisible = false;
-let lastPhaseValue = state.phase || '';
-let rollOverlayVisible = false;
-
-function maybeSetPhase(next) {
-  if (!next) return;
-  const clean = String(next);
-  if (lastPhaseValue === clean) return;
-  lastPhaseValue = clean;
-  setPhase(clean);
-}
-
 function maybeSetLobbyVisible(on) {
   const flag = !!on;
   if (lastLobbyVisible === flag) return;
@@ -135,6 +113,9 @@ function scheduleHydrateKick(delay = HYDRATE_KICK_DELAY_MS) {
   }, delay);
 }
 
+// ---------------------------------------------------------------------------
+// Message de-dupe helpers
+// ---------------------------------------------------------------------------
 function buildMessageKey(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const type = String(raw.type || raw.msgType || raw.kind || '').toUpperCase();
