@@ -14,7 +14,7 @@ setLobbyVisible(true);
 bindJoinUI({
   onJoin: onJoinClicked,
   onResume: tryResume,
-  onReadyClick: () => {},     // wired later by gameplay flows
+  onReadyClick: () => {},
   onRollClick:  () => {},
   onCloseRoll:  () => {}
 });
@@ -39,7 +39,6 @@ async function onJoinClicked(e){
 
   if (!roomCode || !name) { setStatus('Enter room code + name.'); return; }
 
-  // If you later stand up a join API, use it here (kept simple for now).
   const wsUrl = `${WS_BASE}?room=${encodeURIComponent(roomCode)}&role=player`;
   saveDirectWsSession({ wsUrl, roomId: roomCode, displayName: name });
   showJoin(false);
