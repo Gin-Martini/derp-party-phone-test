@@ -1,11 +1,15 @@
-// js/config.js — defaults for public shareable URL
+// js/config.js — public defaults for GH Pages
 const QS = new URLSearchParams(location.search);
 
-// If you later deploy a tiny Join API, put its base URL here or override via ?api=...
-export const API_BASE = QS.get('api') || ''; // empty = use direct WS fallback
+// Optional join API base (unused for direct-relay mode)
+export const API_BASE = (QS.get('api') || '').trim();
 
-// Default relay socket (MUST be wss:// because the page is https)
-export const WS_BASE = (QS.get('ws') || 'wss://derpparty-relay.fly.dev/socket').trim();
+// Default relay socket (must be wss:// for https page)
+export const WS_BASE  = (QS.get('ws')  || 'wss://derpparty-relay.fly.dev/socket').trim();
 
-// Session cache key (cleared on redirect)
+// Hints (allow sharing pre-filled links like ?room=ABC123&name=Matt)
+export const ROOM_HINT = (QS.get('room') || '').trim().toUpperCase();
+export const NAME_HINT = (QS.get('name') || '').trim().slice(0, 32);
+
+// Storage key
 export const SESSION_KEY = 'derpParty.v1';
