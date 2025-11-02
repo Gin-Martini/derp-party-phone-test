@@ -1,18 +1,18 @@
+// js/ws.js — thin WS client with IDENTIFY
 import { state } from './state.js';
-import { STORAGE_KEY, ROOM_HINT, NAME_HINT } from './config.js';
-// If your UI exports setStatus, import it; otherwise replace with console.log
-import { setStatus } from './ui.js';
+import { SESSION_KEY, ROOM_HINT, NAME_HINT } from './config.js';
+import { setStatus } from './views/ui.js';
 
 let ws = null;
 
 function sessionFromStorage() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); }
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); }
   catch { return null; }
 }
 
 export function saveSession(sess) {
   state.session = sess;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sess));
+  localStorage.setItem(SESSION_KEY, JSON.stringify(sess));
 }
 
 export function hasStoredSession() {
@@ -26,70 +26,54 @@ export function loadStoredSession() {
 }
 
 export function clearSession() {
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(SESSION_KEY);
   state.session = null;
 }
 
 export function wsConnect() {
   if (!state.session?.wsUrl) {
-    setStatus?.('No WS URL; join first.') ?? console.log('No WS URL; join first.');
+    setStatus('No WS URL; join first.');
     return;
   }
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-  try {
-    ws = new WebSocket(state.session.wsUrl);
-  } catch (e) {
-    setStatus?.('Bad WS URL') ?? console.log('Bad WS URL');
-    return;
-  }
+  try { ws = new WebSocket(state.session.wsUrl); }
+  catch { setStatus('Bad WS URL'); return; }
 
-  setStatus?.('Connecting…') ?? console.log('Connecting…');
+  setStatus('Connecting…');
 
   ws.onopen = () => {
     state.connected = true;
-    setStatus?.('Connected') ?? console.log('Connected');
-    identify(); // now includes room/name hints for relay-direct flow
+    setStatus('Connected');
+    identify();
   };
 
   ws.onclose = () => {
     state.connected = false;
-    setStatus?.('Disconnected') ?? console.log('Disconnected');
+    setStatus('Disconnected');
   };
 
-  ws.onerror = () => {
-    setStatus?.('WS error') ?? console.log('WS error');
-  };
+  ws.onerror = () => setStatus('WS error');
 
   ws.onmessage = (ev) => {
-    let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (!msg || typeof msg !== 'object' || !msg.type) return;
 
-    // Store last sequence if present
     if (typeof msg.seq === 'number') state.lastSeq = msg.seq;
 
-    // Hand off to your reducer/router (if any)
-    if (window.reduceEnvelope) {
-      window.reduceEnvelope(msg);
-    } else {
-      // Fallback: basic logging
-      if (msg?.type === 'STATE') state.phase = msg?.payload?.phase || state.phase;
-      console.log('[WS] <-', msg.type, msg);
-    }
+    // Hand off to reducer
+    if (window.reduceEnvelope) window.reduceEnvelope(msg);
   };
 }
 
 function identify() {
-  // Send enough context for host to treat this as a join in direct-WS mode.
-  const roomId  = state.session?.roomId || ROOM_HINT || undefined;
+  // Send enough for host to synthesize PLAYER_JOINED on relay-direct path
+  const roomId   = state.session?.roomId || ROOM_HINT || undefined;
   const playerId = state.session?.playerId || undefined;
-  const token   = state.session?.token || undefined;
-  const name    = NAME_HINT || undefined;
+  const token    = state.session?.token || undefined;
+  const name     = state.session?.displayName || NAME_HINT || undefined;
 
-  if (!roomId && !token) return; // nothing useful
+  if (!roomId) return;
 
   send({
     v: 1,
@@ -105,6 +89,6 @@ export function send(obj) {
   ws.send(JSON.stringify(obj));
 }
 
-export function saveDirectWsSession({ wsUrl, roomId='', playerId='', token='' }) {
-  saveSession({ wsUrl, roomId, playerId, token });
+export function saveDirectWsSession({ wsUrl, roomId='', playerId='', token='', displayName='' }) {
+  saveSession({ wsUrl, roomId, playerId, token, displayName });
 }
