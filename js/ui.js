@@ -13,11 +13,17 @@ export function initUi() {
   e.status    = $('status');
   e.joinCard  = $('joinCard');
   e.lobbyArea = $('lobbyArea');
+  e.joinBtn   = $('btnJoin');
+  e.resumeBtn = $('btnResume');
+  e.resetBtn  = $('btnReset');
+  e.roomInput = $('room');
+  e.nameInput = $('name');
+  e.sessionControls = $('sessionControls');
   e.readyBtn  = $('btnReady');
   e.readyPill = $('readyPill');
   e.charGrid  = $('charGrid');
-  e.nameInput = $('name');
   e.dbg       = $('dbg');
+  e.toast     = $('toast');
 
   e.rollPanel   = $('turnOrder');
   e.rollBtn     = $('btnRoll');
@@ -91,9 +97,15 @@ export function setDbg(x){ const d = state.els.dbg; if (d) d.textContent = 'last
 export function log(x){ const el = state.els.log; if (!el) return; el.textContent += x + '\n'; el.scrollTop = el.scrollHeight; }
 
 export function showToast(text, ms=1600){
-  const t = state.$('toast'); if(!t) return;
-  t.textContent = text; t.style.display='block';
-  clearTimeout(showToast._to); showToast._to = setTimeout(()=>t.style.display='none', ms);
+  const t = state.els.toast;
+  if (!t) {
+    try { alert(text); } catch {}
+    return;
+  }
+  t.textContent = text;
+  t.style.display = 'block';
+  clearTimeout(showToast._to);
+  showToast._to = setTimeout(() => { t.style.display = 'none'; }, ms);
 }
 export function setStatus(text, pill=false){
   const el = state.els.status; if(!el) return;
