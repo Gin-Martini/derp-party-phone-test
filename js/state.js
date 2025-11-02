@@ -17,6 +17,7 @@ export const state = {
   // lobby/char select
   catalog: null,
   _pendingCatalog: null,
+  catalogFingerprint: null,
   myReady: false,
   myCharId: null,
   takenChars: new Set(),
