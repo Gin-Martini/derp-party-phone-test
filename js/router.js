@@ -340,6 +340,7 @@ function handleTurnOrderSnapshot(snapshot, { typeHint = '' } = {}) {
 
 function handleTurnOrderFallback(type, raw) {
   const normalized = U(type);
+  if (!normalized || normalized.includes('LOBBY')) return false;
   const looksTurnOrderType = normalized.includes('TURN_ORDER') || normalized.includes('TURNORDER');
   if (looksTurnOrderType && raw && typeof raw === 'object') {
     const payload = raw.turnOrder || raw.turn_order || raw.payload || raw.data || raw.body || raw;
@@ -351,7 +352,7 @@ function handleTurnOrderFallback(type, raw) {
     }
   }
 
-  const nested = findTurnOrderData(raw);
+  const nested = normalized.includes('LOBBY') ? null : findTurnOrderData(raw);
   if (nested && typeof nested === 'object') {
     return handleTurnOrderSnapshot(nested, { typeHint: normalized });
   }
@@ -421,6 +422,7 @@ function handleBoardRollSnapshot(snapshot, { typeHint = '' } = {}) {
 
 function handleBoardRollFallback(type, raw) {
   const normalized = U(type);
+  if (!normalized || normalized.includes('LOBBY')) return false;
   if (normalized.includes('TURN_ORDER')) return false;
   if (normalized.includes('ROLL') || normalized.includes('TURN')) {
     if (raw && typeof raw === 'object') {
