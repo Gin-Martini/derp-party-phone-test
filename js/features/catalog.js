@@ -172,17 +172,17 @@ export function renderCatalog(entries) {
   if (!state.catalog) state.catalog = { entries: [] };
   state.catalog.entries = list;
   state._pendingCatalog = list;
-  const nextFingerprint = fingerprintEntries(list);
-  const prevFingerprint = state.catalogFingerprint;
 
   const grid = state.els.charGrid;
   if (!grid) return;
 
   attachCatalogHandlers();
 
+  const nextFingerprint = fingerprintEntries(list);
+  const prevFingerprint = state.catalogFingerprint;
+
   // Once the grid is available we can flush any pending catalog into it.
   state._pendingCatalog = null;
-  state.catalogFingerprint = nextFingerprint;
 
   if (prevFingerprint && nextFingerprint === prevFingerprint && grid.children.length) {
     markSelected(state.myCharId);
@@ -192,63 +192,122 @@ export function renderCatalog(entries) {
     return;
   }
 
-  // Clear and (re)fill
-  grid.replaceChildren();
-  if (list.length === 0) {
-    const hint = document.createElement('div');
-    hint.className = 'emptyHint';
-    hint.textContent = 'Waiting for the host to publish characters…';
-    grid.appendChild(hint);
+  state.catalogFingerprint = nextFingerprint;
+
+  const existing = new Map();
+  grid.querySelectorAll('.charBtn').forEach((btn) => {
+    const id = btn?.dataset?.charId;
+    if (id) existing.set(id, btn);
+  });
+
+  const desiredOrder = [];
+  const seen = new Set();
+
+  const ensurePortrait = (portrait, label, src) => {
+    if (!portrait) return;
+    const desiredInitials = label.slice(0, 2).toUpperCase();
+    const currentImg = portrait.querySelector('img');
+    if (src) {
+      if (currentImg && currentImg.getAttribute('src') === src) return;
+      if (currentImg) {
+        currentImg.src = src;
+      } else {
+        portrait.innerHTML = '';
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.crossOrigin = 'anonymous';
+        img.referrerPolicy = 'no-referrer';
+        img.src = src;
+        img.onerror = () => {
+          portrait.innerHTML = '';
+          const fb = document.createElement('div');
+          fb.className = 'fallback';
+          fb.textContent = desiredInitials;
+          portrait.appendChild(fb);
+        };
+        portrait.appendChild(img);
+      }
+      const fb = portrait.querySelector('.fallback');
+      if (fb) fb.remove();
+      return;
+    }
+
+    if (currentImg) currentImg.remove();
+    let fallback = portrait.querySelector('.fallback');
+    if (!fallback) {
+      fallback = document.createElement('div');
+      fallback.className = 'fallback';
+      portrait.appendChild(fallback);
+    }
+    fallback.textContent = desiredInitials;
+  };
+
+  const buildButton = (entry, idx) => {
+    const id = String(entry.id ?? idx);
+    const label = entry.label || entry.name || entry.title || entry.id || (`Char ${idx + 1}`);
+    const src = resolvePortraitSrc({
+      url: entry.portraitUrl || entry.imageUrl || entry.url || '',
+      data: entry.portraitData || entry.portrait || ''
+    });
+
+    let btn = existing.get(id);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.className = 'charBtn';
+      btn.type = 'button';
+      btn.dataset.charId = id;
+
+      const portrait = document.createElement('div');
+      portrait.className = 'portrait';
+      btn.appendChild(portrait);
+
+      const name = document.createElement('div');
+      name.className = 'name';
+      btn.appendChild(name);
+    }
+
+    btn.dataset.charId = id;
+
+    const portrait = btn.querySelector('.portrait');
+    ensurePortrait(portrait, label, src);
+
+    const name = btn.querySelector('.name');
+    if (name && name.textContent !== label) name.textContent = label;
+
+    desiredOrder.push(btn);
+    seen.add(id);
+  };
+
+  if (!list.length) {
+    grid.querySelectorAll('.charBtn').forEach((btn) => btn.remove());
+    if (!grid.querySelector('.emptyHint')) {
+      const hint = document.createElement('div');
+      hint.className = 'emptyHint';
+      hint.textContent = 'Waiting for the host to publish characters…';
+      grid.appendChild(hint);
+    }
+    enableReadyButton(false);
     setDbg('catalog: empty');
     return;
   }
 
-  list.forEach((e, idx) => {
-    const id    = String(e.id ?? idx);
-    const label = e.label || e.name || e.title || e.id || ('Char ' + (idx + 1));
-    const src   = resolvePortraitSrc({
-      url:  e.portraitUrl || e.imageUrl || e.url || '',
-      data: e.portraitData || e.portrait || ''
-    });
+  list.forEach((entry, idx) => buildButton(entry, idx));
 
-    const btn = document.createElement('button');
-    btn.className = 'charBtn';
-    btn.type = 'button';
-    btn.dataset.charId = id;
+  existing.forEach((btn, id) => {
+    if (!seen.has(id)) btn.remove();
+  });
 
-    const portrait = document.createElement('div');
-    portrait.className = 'portrait';
-    if (src) {
-      const img = document.createElement('img');
-      img.loading = 'lazy';
-      img.decoding = 'async';
-      img.crossOrigin = 'anonymous';
-      img.referrerPolicy = 'no-referrer';
-      img.src = src;
-      img.onerror = () => {
-        portrait.innerHTML = '';
-        const fb = document.createElement('div');
-        fb.className = 'fallback';
-        fb.textContent = label.slice(0, 2).toUpperCase();
-        portrait.appendChild(fb);
-      };
-      portrait.appendChild(img);
-    } else {
-      const fb = document.createElement('div');
-      fb.className = 'fallback';
-      fb.textContent = label.slice(0, 2).toUpperCase();
-      portrait.appendChild(fb);
-    }
+  const hint = grid.querySelector('.emptyHint');
+  if (hint) hint.remove();
 
-    const name = document.createElement('div');
-    name.className = 'name';
-    name.textContent = label;
-
-    btn.appendChild(portrait);
-    btn.appendChild(name);
+  desiredOrder.forEach((btn) => {
     grid.appendChild(btn);
   });
 
+  markSelected(state.myCharId);
+  if (state.takenChars && state.takenChars.size) markTaken(state.takenChars);
+  enableReadyButton(!!state.myCharId);
   setDbg(`catalog: ${list.length} entries`);
 }
 
