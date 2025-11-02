@@ -3,20 +3,24 @@ import { state } from './state.js';
 import { API_BASE, WS_BASE, ROOM_HINT, NAME_HINT } from './config.js';
 import { setStatus, bindJoinUI, showJoin, setLobbyVisible } from './views/ui.js';
 import { reduceEnvelope } from './store.js';
-import { wsConnect, saveDirectWsSession, saveSession, hasStoredSession, loadStoredSession } from './ws.js';
+import { wsConnect, saveDirectWsSession, saveSession, hasStoredSession, loadStoredSession, send } from './ws.js';
 
 // expose reducer for ws.js callback
 window.reduceEnvelope = reduceEnvelope;
 
 // boot UI
 setStatus('Disconnected');
-setLobbyVisible(true);
+// Hide lobby until we actually receive STATE
+setLobbyVisible(false);
 bindJoinUI({
   onJoin: onJoinClicked,
   onResume: tryResume,
-  onReadyClick: () => {},
-  onRollClick:  () => {},
-  onCloseRoll:  () => {}
+  onReadyClick: (next) => send({ v:1, type:'SET_READY', payload:{ ready: !!next } }),
+  onRollClick:  () => {
+    const id = state.rollPrompt?.rollId || 'turn_order';
+    send({ v:1, type:'ROLL', payload:{ rollId: id } });
+  },
+  onCloseRoll:  () => { /* visual only; host drives flow */ }
 });
 
 // If link pre-fills room/name, move straight to connect
