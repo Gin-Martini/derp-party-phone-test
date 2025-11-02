@@ -761,7 +761,7 @@ function normType(t) {
 // ---------------------------------------------------------------------------
 // Message handling
 // ---------------------------------------------------------------------------
-async function onSocketMessage(msg) {
+export async function onSocketMessage(msg) {
   try {
     let raw = msg;
     if (raw && typeof raw === 'object' && 'data' in raw) raw = raw.data;
