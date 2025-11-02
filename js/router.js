@@ -10,6 +10,19 @@ const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lo
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
 const U = (s) => String(s || '').toUpperCase();
 
+const selectingInLobby = () => state.phase === 'lobby' && !state.myCharId;
+function clearRollStateForLobby() {
+  state.inTurnOrder = false;
+  state.canRollNow = false;
+  state.myHasRolled = false;
+  hideRollOverlay();
+}
+function suppressRollUiIfSelecting() {
+  if (!selectingInLobby()) return false;
+  clearRollStateForLobby();
+  return true;
+}
+
 const normType = (t) => {
   const s = U(t);
   if (!s) return 'TEXT';
@@ -245,6 +258,7 @@ function extractBoardRollData(root, limit = 500) {
 
 function handleTurnOrderSnapshot(snapshot, { typeHint = '' } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return false;
+  if (suppressRollUiIfSelecting()) return false;
 
   const normalizedType = String(typeHint || '').toUpperCase();
   const statusRaw = snapshot.status ?? snapshot.state ?? snapshot.phase ?? snapshot.stage ?? snapshot.turnOrderStatus ?? snapshot.turnOrderState;
@@ -360,6 +374,7 @@ function handleTurnOrderFallback(type, raw) {
 
 function handleBoardRollSnapshot(snapshot, { typeHint = '' } = {}) {
   if (!snapshot || typeof snapshot !== 'object') return false;
+  if (suppressRollUiIfSelecting()) return false;
 
   const normalized = String(typeHint || '').toUpperCase();
   if (normalized.includes('TURN_ORDER')) return false;
@@ -515,6 +530,7 @@ function applyCatalogSnapshot(entries, { force = false } = {}) {
   }
 
   ensureLobbyShown();
+  clearRollStateForLobby();
   renderCatalog(nextList);
   return true;
 }
@@ -654,6 +670,7 @@ export async function onSocketMessage(msg){
       }
 
       case 'TURN_ORDER_START': {
+        if (suppressRollUiIfSelecting()) return;
         setPhase('turn_order');
         state.inTurnOrder = true;
         state.canRollNow = false;
@@ -664,6 +681,7 @@ export async function onSocketMessage(msg){
       }
 
       case 'TURN_ORDER_FEEDBACK': {
+        if (suppressRollUiIfSelecting()) return;
         const rollValue = raw.roll ?? raw.value ?? raw.total;
         const playerId = raw.playerId || raw.id || raw.socketId;
         const mine = !!playerId && String(playerId) === String(state.playerId || '');
@@ -679,6 +697,7 @@ export async function onSocketMessage(msg){
       }
 
       case 'TURN_ORDER_FINAL': {
+        if (suppressRollUiIfSelecting()) return;
         const order = Array.isArray(raw.order) ? raw.order : [];
         const toLabel = (entry) => entry?.name || entry?.displayName || entry?.playerName || entry?.playerId || entry?.id || '';
         const text = order.map(toLabel).filter(Boolean).join(' → ');
@@ -693,6 +712,7 @@ export async function onSocketMessage(msg){
 
       case 'YOUR_TURN':
       case 'ROLL_PROMPT': {
+        if (suppressRollUiIfSelecting()) return;
         const playerId = raw.playerId || raw.id || raw.socketId;
         const mine = !!playerId && String(playerId) === String(state.playerId || '');
         setPhase('board');
@@ -710,6 +730,7 @@ export async function onSocketMessage(msg){
       }
 
       case 'MOVE_ROLL': {
+        if (suppressRollUiIfSelecting()) return;
         const playerId = raw.playerId || raw.id || raw.socketId;
         const mine = !!playerId && String(playerId) === String(state.playerId || '');
         const value = raw.value ?? raw.roll ?? raw.steps;
