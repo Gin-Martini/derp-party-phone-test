@@ -1,78 +1,54 @@
-// js/main.js — join with room code; uses Join API if present, else direct WS fallback
-import { state } from './state.js?v=11.0.14';
-import { initUi, hideJoinCard, setLobbyVisible, setPhase, showToast } from './ui.js?v=11.0.14';
-import { API_BASE, WS_BASE, SESSION_KEY } from './config.js?v=11.0.14';
-import { setOnSocketMessage } from './ws.js?v=11.0.14';
-import { onSocketMessage } from './router.js?v=11.0.14';
+// js/main.js — click Join → build ws URL → save session → connect
+import { state } from './state.js';
+import { API_BASE, WS_BASE, ROOM_HINT, NAME_HINT } from './config.js';
+import { setStatus, bindJoinUI, showJoin, setLobbyVisible } from './views/ui.js';
+import { reduceEnvelope } from './store.js';
+import { wsConnect, saveDirectWsSession, saveSession, hasStoredSession, loadStoredSession } from './ws.js';
 
-const $ = (s)=>document.querySelector(s);
-function setStatus(s, busy=false){
-  const el = $('#status'); if (el) el.textContent = s || '';
-  if (busy) el?.classList?.add('busy'); else el?.classList?.remove('busy');
+// expose reducer for ws.js callback
+window.reduceEnvelope = reduceEnvelope;
+
+// boot UI
+setStatus('Disconnected');
+setLobbyVisible(true);
+bindJoinUI({
+  onJoin: onJoinClicked,
+  onResume: tryResume,
+  onReadyClick: () => {},     // wired later by gameplay flows
+  onRollClick:  () => {},
+  onCloseRoll:  () => {}
+});
+
+// If link pre-fills room/name, move straight to connect
+if (ROOM_HINT) {
+  const wsUrl = `${WS_BASE}?room=${encodeURIComponent(ROOM_HINT)}&role=player`;
+  saveDirectWsSession({ wsUrl, roomId: ROOM_HINT, displayName: NAME_HINT || '' });
+  showJoin(false);
+  wsConnect();
+} else if (hasStoredSession()) {
+  loadStoredSession();
+  wsConnect();
 }
 
-// Boot
-(function boot(){
-  setOnSocketMessage(onSocketMessage);
-  initUi();
-  setLobbyVisible(true); setPhase('lobby');
-  setStatus('Disconnected');
-  const btn = $('#btnJoin'); if (btn) btn.addEventListener('click', onJoinClicked);
-})();
-
-// --- JOIN FLOW ---
 async function onJoinClicked(e){
   e?.preventDefault?.();
+  const roomInput = document.querySelector('#roomCode');
+  const nameInput = document.querySelector('#playerName');
+  const roomCode = (roomInput?.value || '').trim().toUpperCase();
+  const name = (nameInput?.value || '').trim();
 
-  const roomCode = ($('#room')?.value || '').trim().toUpperCase();
-  const name = ($('#name')?.value || '').trim();
+  if (!roomCode || !name) { setStatus('Enter room code + name.'); return; }
 
-  if (!roomCode || !name){
-    showToast?.('Enter room code and name.');
-    return;
-  }
-
-  // 1) If a Join API is configured, use it.
-  if (API_BASE){
-    try{
-      setStatus('Contacting server…', true);
-      const res = await fetch(`${API_BASE.replace(/\/+$/,'')}/api/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, name })
-      });
-      if (!res.ok){
-        setStatus('Join failed');
-        showToast?.(`Join failed (${res.status})`);
-        return;
-      }
-      const { wsUrl, roomId } = await res.json();
-      if (!wsUrl){
-        setStatus('Join failed'); showToast?.('No wsUrl from server.'); return;
-      }
-      redirectWithWs(wsUrl, (roomId || roomCode), name);
-      return;
-    }catch(err){
-      setStatus('Join failed');
-      showToast?.(String(err?.message || err));
-      return;
-    }
-  }
-
-  // 2) No API? Fall back to direct WS using your relay.
-  if (!WS_BASE){
-    showToast?.('No relay configured.');
-    return;
-  }
-  redirectWithWs(WS_BASE, roomCode, name);
+  // If you later stand up a join API, use it here (kept simple for now).
+  const wsUrl = `${WS_BASE}?room=${encodeURIComponent(roomCode)}&role=player`;
+  saveDirectWsSession({ wsUrl, roomId: roomCode, displayName: name });
+  showJoin(false);
+  wsConnect();
 }
 
-// Redirect so router.js auto-connects and sends IDENTIFY
-function redirectWithWs(wsUrl, roomId, name){
-  const url = new URL(location.href);
-  url.searchParams.set('ws', wsUrl);
-  url.searchParams.set('room', roomId);
-  url.searchParams.set('name', name);
-  try { localStorage.removeItem(SESSION_KEY); } catch {}
-  location.href = url.toString();
+function tryResume(){
+  if (!hasStoredSession()) return;
+  loadStoredSession();
+  showJoin(false);
+  wsConnect();
 }
