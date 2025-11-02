@@ -1,10 +1,10 @@
+// js/store.js
 import { state } from './state.js';
 import {
-  setLobbyVisible, renderCatalog, setReadyEnabled, showRollOverlay, hideRollOverlay,
-  setRollPrompt, setRollResults, setStatus, showJoin, showScreen, renderScreen,
-  onTileClicked
+  setLobbyVisible, renderCatalog, setReadyEnabled,
+  showRollOverlay, hideRollOverlay, setRollPrompt, setRollResults,
+  setStatus, showJoin, showScreen, renderScreen
 } from './views/ui.js';
-import { send } from './ws.js';
 
 function applySeq(seq) {
   if (typeof seq !== 'number') return true;
@@ -14,89 +14,137 @@ function applySeq(seq) {
 }
 
 export function reduceEnvelope(incoming) {
-  // Unwrap C# envelopes that slipped past ws.js (defensive)
+  // Compat: unwrap C# envelopes if any slipped through ws.js
   let msg = incoming;
   if (String(msg?.type).startsWith('StateEnvelope') && msg?.payload) {
     const inner = msg.payload;
     msg = { v: inner.v || 1, type: inner.type || 'STATE', seq: msg.seq ?? inner.seq ?? 0, payload: inner.payload ?? inner };
   }
-  // Bare STATE fallback (host placed fields at top-level)
-  if (msg?.type === 'STATE' && !msg.payload && (msg.phase || msg.me || msg.lobby)) {
-    msg = { ...msg, payload: { phase: msg.phase, me: msg.me, lobby: msg.lobby, flags: msg.flags } };
-  }
 
-  const { type, seq, payload } = msg || {};
+  const { type, seq, payload } = msg;
 
   switch (type) {
     case 'STATE':
+    case 'BROADCAST_STATE':   // safety: treat as STATE
       if (!applySeq(seq)) return;
       applyState(payload);
       break;
 
-    case 'ROLL_PROMPT': {
+    case 'ROLL_PROMPT':
       if (!applySeq(seq)) return;
       state.rollPrompt = payload;
       const meId = state.me?.id;
       const allowed = payload?.allowedPlayers || [];
-      const already = new Set(payload?.alreadyRolled || []);
-      const canSee = state.phase === 'roll_turn_order' && meId && allowed.includes(meId) && !already.has(meId);
-      setRollPrompt(payload, canSee);
-      if (canSee) showRollOverlay(); else hideRollOverlay();
+      const already = new Set((payload?.alreadyRolled || []).map(x => x?.playerId));
+      const iCanRoll = meId && allowed.includes(meId) && !already.has(meId);
+      setRollPrompt(payload);
+      if (iCanRoll) showRollOverlay(payload); else hideRollOverlay();
       break;
-    }
 
     case 'ROLL_RESULT':
       if (!applySeq(seq)) return;
       state.rollResults = payload;
       setRollResults(payload);
-      if (payload?.complete) hideRollOverlay();
       break;
 
     case 'SCREEN':
       if (!applySeq(seq)) return;
-      state.lastScreen = payload;
-      showScreen(true);
-      renderScreen(payload, state.me?.id);
+      state.lastScreen = payload || null;
+      showScreen(Boolean(state.lastScreen));
+      if (state.lastScreen) renderScreen(state.lastScreen, state.me?.id);
       break;
 
     case 'ERROR':
-      setStatus(`Error: ${payload?.code || ''} ${payload?.message || ''}`);
+      setStatus(String(payload?.message || 'Error'));
       break;
 
     default:
-      // ignore unknown
+      // ignore unknown messages
       break;
   }
 }
 
-function applyState(snap) {
-  state.phase = snap?.phase || 'disconnected';
-  state.me    = snap?.me    || null;
-  state.lobby = snap?.lobby || null;
+// ----- STATE / PATCH handling -----
+function applyState(payload) {
+  if (!payload) return;
 
+  // If host sent RFC6902-style patches, apply them to live state
+  if (Array.isArray(payload.patches)) {
+    jsonPatch(state, payload.patches);
+  } else {
+    // Merge snapshot fields
+    if (payload.phase !== undefined) state.phase = payload.phase;
+    if (payload.me !== undefined)    state.me = payload.me;
+    if (payload.lobby !== undefined) state.lobby = payload.lobby;
+  }
+
+  // Default shapes to keep UI stable
+  if (!state.lobby) state.lobby = { players: [], catalog: { version: 0, entries: [] }, allReady: false };
+  if (!state.lobby.catalog) state.lobby.catalog = { version: 0, entries: [] };
+  if (!Array.isArray(state.lobby.players)) state.lobby.players = [];
+  if (!Array.isArray(state.lobby.catalog.entries)) state.lobby.catalog.entries = [];
+
+  // Phase → UI
   if (state.phase === 'lobby') {
-    showScreen(false);
+    showJoin(false);
     setLobbyVisible(true);
     renderLobby();
-  } else if (state.phase === 'roll_turn_order') {
-    setLobbyVisible(false);
-    showScreen(false);
-    // ROLL_PROMPT controls overlay visibility
   } else {
     setLobbyVisible(false);
-    showScreen(!!state.lastScreen);
-    if (state.lastScreen) renderScreen(state.lastScreen, state.me?.id);
   }
 }
 
 function renderLobby() {
-  const catalog = state.lobby?.catalog;
-  const entries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+  const entries = Array.isArray(state.lobby?.catalog?.entries) ? state.lobby.catalog.entries : [];
   renderCatalog(entries, state);
   setReadyEnabled(Boolean(state.me?.charId));
+}
 
-  // Wire tile → CHOOSE_CHARACTER
-  onTileClicked((charId) => {
-    send({ v:1, type:'CHOOSE_CHARACTER', payload:{ charId } });
-  });
+// ----- Minimal JSON Patch (add, remove, replace) -----
+function jsonPatch(root, patches) {
+  for (const p of patches) {
+    const op = String(p.op || '').toLowerCase();
+    const { obj, key, parent } = pointerParent(root, p.path, op === 'add');
+    if (!obj) continue;
+
+    if (op === 'add') {
+      if (Array.isArray(obj)) {
+        if (key === '-') obj.push(p.value);
+        else obj.splice(indexify(key, obj.length), 0, p.value);
+      } else {
+        obj[key] = p.value;
+      }
+    } else if (op === 'replace') {
+      if (Array.isArray(obj)) obj[indexify(key, obj.length)] = p.value;
+      else obj[key] = p.value;
+    } else if (op === 'remove') {
+      if (Array.isArray(obj)) obj.splice(indexify(key, obj.length), 1);
+      else delete obj[key];
+    }
+    // ignore test/move/copy
+  }
+}
+
+function indexify(k, len) {
+  const i = Number(k);
+  return Number.isInteger(i) ? Math.max(0, Math.min(len, i)) : 0;
+}
+
+function decodeToken(t) { return t.replace(/~1/g, '/').replace(/~0/g, '~'); }
+
+function pointerParent(root, path, create) {
+  const parts = String(path || '').split('/').slice(1).map(decodeToken);
+  if (!parts.length) return { obj: null, key: null };
+  let obj = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const token = parts[i];
+    if (obj[token] == null) {
+      if (!create) return { obj: null, key: null };
+      // choose {} or []
+      const next = parts[i + 1];
+      obj[token] = /^[0-9]+$/.test(next) ? [] : {};
+    }
+    obj = obj[token];
+  }
+  return { obj, key: parts[parts.length - 1] };
 }
