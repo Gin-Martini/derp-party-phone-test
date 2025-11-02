@@ -1,100 +1,85 @@
-import { API_BASE, DIRECT_WS, ROOM_HINT, NAME_HINT, PID_HINT } from './config.js';
-import { state } from './state.js';
-import { saveSession, saveDirectWsSession, wsConnect, hasStoredSession, loadStoredSession, send } from './ws.js';
-import { $, setStatus, bindJoinUI, setLobbyVisible, setReadyEnabled, onTileClicked,
-         showJoin, showScreen, renderScreen, showRollOverlay, hideRollOverlay } from './views/ui.js';
+// js/main.js — bootstrap + join flow via Join API with graceful fallback
+import { state } from './state.js?v=11.0.13';
+import { initUi, hideJoinCard, setLobbyVisible, setPhase, showToast } from './ui.js?v=11.0.13';
+import { API_BASE, WS_OVERRIDE, SESSION_KEY } from './config.js?v=11.0.13';
+import { setOnSocketMessage } from './ws.js?v=11.0.13';
+import { onSocketMessage } from './router.js?v=11.0.13';
 
-// Wire base UI
-bindJoinUI({ onJoin, onResume, onReadyClick, onRollClick, onCloseRoll });
-
-initResumeHint();
-prefillHints();
-showJoin(true);
-setLobbyVisible(false);
-showScreen(false);
-hideRollOverlay();
-
-// --- Relay-direct mode: if ?ws=... is present, skip HTTP join entirely.
-if (DIRECT_WS) {
-  const wsUrl = DIRECT_WS;
-  const roomId = ROOM_HINT || '';           // optional
-  const playerId = PID_HINT || '';          // optional
-  const token = '';                         // optional
-  setStatus('Connecting (relay-direct)…', true);
-  saveDirectWsSession({ wsUrl, roomId, playerId, token });
-  wsConnect();
-  showJoin(false);
+const $ = (s)=>document.querySelector(s);
+function setStatus(s, busy=false){
+  const el = $('#status'); if (el) el.textContent = s || '';
+  if (busy) el?.classList?.add('busy'); else el?.classList?.remove('busy');
 }
 
-function initResumeHint() {
-  const resume = $('#btnResume');
-  if (hasStoredSession()) resume.classList.remove('hidden');
-  else resume.classList.add('hidden');
-}
+// If a direct WS override is present, router.js will auto-connect. Just wire handlers/UI.
+(function boot(){
+  setOnSocketMessage(onSocketMessage);
+  initUi();
+  setLobbyVisible(true); setPhase('lobby');
+  setStatus(WS_OVERRIDE ? 'Connecting…' : 'Disconnected');
 
-function prefillHints() {
-  if (ROOM_HINT) $('#roomCode').value = ROOM_HINT;
-  if (NAME_HINT) $('#playerName').value = NAME_HINT;
-}
+  // Wire the Join button
+  const btn = $('#btnJoin'); if (btn) btn.addEventListener('click', onJoinClicked);
+})();
 
-async function onJoin() {
-  const roomCode = $('#roomCode').value.trim().toUpperCase();
-  const name = $('#playerName').value.trim();
-  if (!roomCode || !name) { setStatus('Enter code and name.'); return; }
+// --- JOIN FLOW ---
+async function onJoinClicked(e){
+  e?.preventDefault?.();
 
-  // If there is no API configured, fail fast with a helpful hint.
-  if (!API_BASE) {
-    setStatus('No API configured. Either add ?api=https://your-api OR pass ?ws=wss://relay/socket…');
+  const roomCode = ($('#room')?.value || '').trim().toUpperCase();
+  const name = ($('#name')?.value || '').trim();
+
+  if (!roomCode || !name){
+    showToast?.('Enter room code and name.');
     return;
   }
 
-  setStatus('Joining…', true);
-  try {
-    const res = await fetch(`${API_BASE}/api/join`, {
-      method:'POST',
-      headers:{'content-type':'application/json'},
+  // If a direct WS is provided in URL, just redirect to let router.js handle IDENTIFY
+  if (WS_OVERRIDE){
+    redirectWithWs(WS_OVERRIDE, roomCode, name);
+    return;
+  }
+
+  if (!API_BASE){
+    showToast?.('No join service configured.');
+    return;
+  }
+
+  try{
+    setStatus('Contacting server…', true);
+    const res = await fetch(`${API_BASE.replace(/\/+$/,'')}/api/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ roomCode, name })
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    // Expect: { roomId, playerId, token, wsUrl }
-    if (!data?.roomId || !data?.playerId || !data?.token || !data?.wsUrl) {
-      throw new Error('Bad join payload');
+    if (!res.ok){
+      setStatus('Join failed');
+      const t = await safeText(res);
+      showToast?.(t || `Join failed (${res.status})`);
+      return;
     }
-    saveSession(data);
-    setStatus('Joined. Opening socket…');
-    wsConnect();
-    showJoin(false);
-  } catch (e) {
-    // Mixed content / CORS / no server all show as "Failed to fetch".
-    setStatus(`Join failed. Options: add ?api=https://your-api OR use ?ws=wss://relay…`);
+    const { wsUrl, roomId } = await res.json();
+    if (!wsUrl){
+      setStatus('Join failed');
+      showToast?.('No wsUrl from server.');
+      return;
+    }
+    redirectWithWs(wsUrl, roomId || roomCode, name);
+  }catch(err){
+    setStatus('Join failed');
+    showToast?.(String(err?.message || err));
   }
 }
 
-function onResume() {
-  const s = loadStoredSession();
-  if (!s) { setStatus('No session to resume'); return; }
-  setStatus('Resuming…');
-  wsConnect();
-  showJoin(false);
+function redirectWithWs(wsUrl, roomId, name){
+  // Preserve current path; add params the router understands
+  const url = new URL(location.href);
+  url.searchParams.set('ws', wsUrl);
+  url.searchParams.set('room', roomId);
+  url.searchParams.set('name', name);
+  // Clear any stale session
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+  location.href = url.toString();
 }
 
-function onReadyClick(nextReady) {
-  send({ v:1, type:'SET_READY', payload:{ ready: nextReady } });
-  setReadyEnabled(false); // prevent spam; server STATE will re-enable
-}
-
-function onRollClick() {
-  const rollId = state.rollPrompt?.rollId;
-  if (!rollId) return;
-  send({ v:1, type:'ROLL', payload:{ rollId } });
-}
-
-function onCloseRoll() {
-  hideRollOverlay();
-}
-
-// Character selection callback
-onTileClicked((charId) => {
-  send({ v:1, type:'CHOOSE_CHARACTER', payload:{ charId } });
-});
+async function safeText(res){ try { return await res.text(); } catch { return ''; } }
