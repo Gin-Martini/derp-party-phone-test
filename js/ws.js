@@ -22,7 +22,13 @@ function isTerminalClose(ev){
 
 // message router hook (set by router.js)
 let _onSocketMessage = () => {};
-export function setOnSocketMessage(fn){ _onSocketMessage = fn || (()=>{}); }
+let _boundRouterHandler = null;
+export function setOnSocketMessage(fn){
+  const handler = fn || (()=>{});
+  if (_boundRouterHandler === handler) return;
+  _boundRouterHandler = handler;
+  _onSocketMessage = handler;
+}
 
 // config
 const WS_BASE = 'wss://derpparty-relay.fly.dev/socket';
@@ -124,13 +130,7 @@ function scheduleRehydrate(ms=900){
   if (state._rehydrateTimer) clearTimeout(state._rehydrateTimer);
   state._rehydrateTimer = setTimeout(()=>{
     state._rehydrateTimer = 0;
-    if (shouldSkipHydrate()) return;
-    requestRehydrate();
-    if (!shouldSkipHydrate()) {
-      setTimeout(()=>{
-        if (!shouldSkipHydrate()) requestRehydrate();
-      }, 1500);
-    }
+    try { _onSocketMessage({ type: 'WS_RETRY' }); } catch (_) {}
   }, ms);
 }
 
@@ -186,7 +186,9 @@ export function connectWs(){
       showToast('Room not found or expired.');
     }, 12000);
 
-    scheduleRehydrate(300);
+    setTimeout(() => {
+      try { _onSocketMessage({ type: 'WS_OPEN' }); } catch (_) {}
+    }, 300);
   };
 
   sock.onmessage = async (ev) => {
