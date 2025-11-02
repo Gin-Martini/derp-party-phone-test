@@ -617,6 +617,13 @@ function buildLobbySignature(snapshot, catalogEntries) {
 }
 
 function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
+  if (isLobbyShowing()) {
+    if (rollOverlayVisible) {
+      hideRollOverlay();
+      rollOverlayVisible = false;
+    }
+    return;
+  }
   const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
   const lobbyShowing = isLobbyShowing();
 
