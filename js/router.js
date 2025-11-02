@@ -742,84 +742,38 @@ function normType(t) {
 // ---------------------------------------------------------------------------
 // Message handling
 // ---------------------------------------------------------------------------
+// js/router.js — replace ONLY this function
 export async function onSocketMessage(msg) {
   try {
+    // --- normalize incoming payload (Blob/ArrayBuffer/string/object) ---
     let raw = msg;
     if (raw && typeof raw === 'object' && 'data' in raw) raw = raw.data;
     if (raw instanceof Blob) raw = await raw.text();
     else if (raw instanceof ArrayBuffer) raw = new TextDecoder().decode(raw);
-
-    if (Array.isArray(raw)) {
-      for (const item of raw) await onSocketMessage(item);
-      return;
-    }
-
     if (typeof raw === 'string') {
-      const trimmed = raw.trim();
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        try { raw = JSON.parse(trimmed); }
-        catch { setStatus(trimmed); ensureLobbyShown(); return; }
-      } else {
-        setStatus(trimmed);
-        ensureLobbyShown();
-        return;
+      const s = raw.trim();
+      if (!s || (s[0] !== '{' && s[0] !== '[')) {
+        const up = s.toUpperCase();
+        if (up.includes('PONG') || up.includes('PING')) return;
+        return; // ignore non-JSON chatter
       }
+      try { raw = JSON.parse(s); } catch { return; }
     }
 
-    if (!raw || typeof raw !== 'object') return;
-    if (!shouldProcessMessage(raw)) return;
+    // --- de-dupe identical messages ---
+    if (isDup(raw)) return;
 
-    const type = normType(raw.type || raw.msgType || raw.kind);
-
-    if (type === 'WS_OPEN') {
-      resetHydrationTracking({ keepVersion: true });
-      scheduleHydrateKick();
-      return;
-    }
-    if (type === 'WS_RETRY') {
-      requestHydrateBurst('retry-signal');
-      return;
-    }
+    const type = normType(raw?.type || raw?.msg || raw?.kind || raw?.messageType);
 
     switch (type) {
       case 'HELLO': {
-        setStatus('Connected. Waiting for host...');
-        hideJoinCard();
         ensureLobbyShown();
-        if (raw.playerId) state.playerId = raw.playerId;
-        if (raw.roomId) state.roomId = raw.roomId;
-        resetHydrationTracking({ keepVersion: true });
-        scheduleHydrateKick();
-        return;
-      }
-
-      case 'CHARACTER_CATALOG': {
-        const payload = raw.payload || raw.data || raw;
-        const version = noteCatalogVersion(payload, raw);
-        const entries = pickCatalogEntries(payload);
-        if (entries) {
-          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: version ?? payload?.version ?? raw.version, debounce: false });
-        }
-        markHydrated();
-        return;
-      }
-
-      case 'CHARACTER_CATALOG_PATCH': {
-        const trip = findPatchTriplet(raw);
-        if (trip) {
-          applyCatalogPatch(trip);
-          noteCatalogVersion(trip, raw);
-          applyCatalogSnapshot(state.catalog.entries, { options: raw.payload?.options ?? raw.payload?.meta, force: true, version: state.catalogVersion, debounce: false });
-        } else {
-          const payload = raw.payload || raw.data || raw;
-          const entries = pickCatalogEntries(payload);
-          if (entries) applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: true, version: state.catalogVersion, debounce: false });
-        }
-        markHydrated({ version: state.catalogVersion });
+        requestRehydrateSoon('hello');
         return;
       }
 
       case 'STATE': {
+        // 1) Merge lobby/game state if present
         const payload = raw.payload || raw.data || raw.body || raw.state || raw;
         if (payload && typeof payload === 'object') {
           if (payload.lobbySnapshot || payload.lobby_state) {
@@ -828,6 +782,27 @@ export async function onSocketMessage(msg) {
             mergeState(payload.state || payload, { debounceCatalog: true });
           }
         }
+
+        // 2) ALSO handle catalog envelopes/patch triplets piggybacked on STATE
+        //    (This was the missing piece; without it the grid never renders.)
+        const trip = findPatchTriplet(payload);
+        if (trip) {
+          noteCatalogVersion(payload);
+          applyCatalogPatch(trip);
+          // commit pending list with debounce to avoid flicker during batch patches
+          const list = (state._pendingCatalog && state._pendingCatalog.length)
+            ? state._pendingCatalog
+            : state.catalog?.entries || [];
+          commitCatalogRender(list, { debounce: true });
+        } else {
+          const entries = pickCatalogEntries(payload);
+          if (entries && entries.length) {
+            const version = noteCatalogVersion(payload);
+            applyCatalogSnapshot(entries, { debounce: true, version });
+          }
+        }
+
+        // 3) Turn/roll overlays (unchanged)
         handleTurnOrderSnapshot(payload);
         handleBoardRollSnapshot(payload);
         updateRollOverlayVisibility({ immediateUpdate: true });
@@ -844,32 +819,51 @@ export async function onSocketMessage(msg) {
         return;
       }
 
-      case 'TURN_ORDER_SNAPSHOT': {
-        if (handleTurnOrderSnapshot(raw.payload || raw.data || raw)) markHydrated({ version: state.catalogVersion });
+      case 'CHARACTER_CATALOG': {
+        const payload = raw.payload || raw.data || raw.body || raw;
+        const entries = pickCatalogEntries(payload);
+        if (entries && entries.length) {
+          const version = noteCatalogVersion(payload);
+          applyCatalogSnapshot(entries, { debounce: false, version });
+          markHydrated({ version: state.catalogVersion });
+        }
         return;
       }
 
-      case 'ROLL_PROMPT':
-      case 'YOUR_TURN':
-      case 'MOVE_ROLL':
-      case 'ROLL_STATE': {
-        const payload = raw.payload || raw.data || raw;
-        handleBoardRollSnapshot(payload);
-        markHydrated({ version: state.catalogVersion });
+      case 'CHARACTER_CATALOG_PATCH': {
+        const payload = raw.payload || raw.data || raw.body || raw;
+        const trip = findPatchTriplet(payload) || payload;
+        if (trip) {
+          noteCatalogVersion(payload);
+          applyCatalogPatch(trip);
+          commitCatalogRender(state._pendingCatalog?.length ? state._pendingCatalog : state.catalog.entries, { debounce: true });
+          markHydrated({ version: state.catalogVersion });
+        }
         return;
       }
 
       default: {
+        // Fallback: try to extract catalog content from odd wrappers
         const payload = raw.payload || raw.data || raw.body || raw;
-        const version = noteCatalogVersion(payload, raw);
-        const entries = pickCatalogEntries(payload);
-        if (entries) {
-          applyCatalogSnapshot(entries, { options: payload?.options ?? payload?.meta, force: false, version: version ?? payload?.version ?? null, debounce: false });
+        const trip = findPatchTriplet(payload);
+        if (trip) {
+          noteCatalogVersion(payload);
+          applyCatalogPatch(trip);
+          commitCatalogRender(state._pendingCatalog?.length ? state._pendingCatalog : state.catalog.entries, { debounce: true });
+          markHydrated({ version: state.catalogVersion });
+          return;
         }
+        const entries = pickCatalogEntries(payload);
+        if (entries && entries.length) {
+          const version = noteCatalogVersion(payload);
+          applyCatalogSnapshot(entries, { debounce: false, version });
+          markHydrated({ version: state.catalogVersion });
+          return;
+        }
+        // also keep turn/roll responsive even on unknown wrappers
         handleTurnOrderSnapshot(payload);
         handleBoardRollSnapshot(payload);
         updateRollOverlayVisibility({ immediateUpdate: true });
-        markHydrated({ version: state.catalogVersion });
         return;
       }
     }
@@ -877,6 +871,7 @@ export async function onSocketMessage(msg) {
     console.error('router error', err);
   }
 }
+
 
 setOnSocketMessage(onSocketMessage);
 
