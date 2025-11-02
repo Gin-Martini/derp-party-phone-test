@@ -2,7 +2,7 @@
 import * as WS from './ws.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { state } from './state.js?v=11.0.12';
-import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.12';
+import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase, setReadyUI, enableReadyButton, showToast } from './ui.js?v=11.0.12';
 import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.12';
 import { onSocketMessage } from './router.js?v=11.0.12';
 import { wireRollButton, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
@@ -21,6 +21,75 @@ function toast(msg){
 }
 
 let storedSession = null;
+
+function buildReadyPayload(nextReady) {
+  const ready = !!nextReady;
+  const status = ready ? 'READY' : 'NOT_READY';
+  const roomId = String(state.roomId || '').trim();
+  const playerId = String(state.playerId || '').trim();
+  const characterId = String(state.myCharId || '').trim();
+  const base = {
+    roomId: roomId || undefined,
+    playerId: playerId || undefined,
+    characterId: characterId || undefined,
+    ready,
+    isReady: ready,
+    playerReady: ready,
+    readyState: status,
+    state: status,
+    status,
+    value: ready,
+    valueLabel: status
+  };
+  if (!characterId) delete base.characterId;
+  return base;
+}
+
+function pushReadyState(nextReady) {
+  const base = buildReadyPayload(nextReady);
+  const intents = nextReady
+    ? ['READY', 'PLAYER_READY', 'SET_READY', 'READY_UP']
+    : ['UNREADY', 'PLAYER_UNREADY', 'SET_UNREADY', 'READY_DOWN'];
+  const directTypes = nextReady
+    ? ['PLAYER_READY', 'READY', 'PLAYER_READY_STATE', 'READY_STATE', 'READY_STATUS', 'READY_UP']
+    : ['PLAYER_UNREADY', 'UNREADY', 'PLAYER_READY_STATE', 'READY_STATE', 'READY_STATUS', 'READY_DOWN'];
+
+  const sentIntents = new Set();
+  intents.forEach((intent) => {
+    const key = String(intent || '').trim();
+    if (!key || sentIntents.has(key)) return;
+    sentIntents.add(key);
+    try { WS.sendIntent?.(key, base); } catch {}
+  });
+
+  const sentTypes = new Set();
+  directTypes.forEach((type) => {
+    const key = String(type || '').trim();
+    if (!key || sentTypes.has(key)) return;
+    sentTypes.add(key);
+    try { WS.wsSend?.({ type: key, ...base }); } catch {}
+  });
+}
+
+function onReadyClicked(ev) {
+  ev?.preventDefault?.();
+  const btn = $('#btnReady');
+  if (!btn) return;
+
+  const hasChar = String(state.myCharId || '').trim().length > 0;
+  if (!hasChar && !state.myReady) {
+    enableReadyButton(false);
+    toast('Pick a character first.');
+    try { showToast('Pick a character first.'); } catch {}
+    return;
+  }
+
+  const nextReady = !state.myReady;
+  setReadyUI(nextReady);
+  pushReadyState(nextReady);
+  btn.blur?.();
+}
+window._READY = onReadyClicked;
 
 // Wire the router immediately so the very first WS messages (HELLO/CATALOG) are handled.
 WS.setOnSocketMessage(onSocketMessage);
@@ -124,6 +193,11 @@ function bindJoin(){
   const fire = (e)=>onJoinClicked(e);
   ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
   $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
+}
+
+function bindReady(){
+  const btn = $('#btnReady'); if (!btn) return;
+  btn.addEventListener('click', onReadyClicked, { passive: false });
 }
 
 function onResetClicked(e){
@@ -268,6 +342,7 @@ function boot(){
   const initialCatalog = Array.isArray(state._pendingCatalog) ? state._pendingCatalog : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
   renderCatalog(initialCatalog);
   bindJoin();
+  bindReady();
   bindResume();
   bindSessionControls();
   const didReset = maybeResetFromQuery();

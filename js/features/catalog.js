@@ -1,10 +1,47 @@
 // js/features/catalog.js — FULL FILE (adds empty-state hint + deep extract helper)
 import { state } from '../state.js?v=11.0.12';
-import { setDbg, resolvePortraitSrc, showToast, enableReadyButton } from '../ui.js?v=11.0.12';
+import { setDbg, resolvePortraitSrc, showToast, enableReadyButton, setReadyUI } from '../ui.js?v=11.0.12';
 import { wsSend } from '../ws.js?v=11.0.12';
 
 const ID_KEYS = ['id', 'characterId', 'key', 'slug', 'code'];
 const LOOKS_LIKE_ENTRY_KEYS = ['label', 'name', 'title', 'portrait', 'portraitUrl', 'portraitData', 'imageUrl'];
+
+function stableValueForFingerprint(value, seen, depth = 0) {
+  if (value === null) return null;
+  const type = typeof value;
+  if (type === 'string' || type === 'number' || type === 'boolean') return value;
+  if (type === 'function') return '__fn__';
+  if (type === 'symbol') return String(value);
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) {
+    if (depth > 4) return value.length;
+    return value.map(item => stableValueForFingerprint(item, seen, depth + 1));
+  }
+  if (type === 'object') {
+    if (seen.has(value)) return '__cycle__';
+    seen.add(value);
+    if (depth > 4) return Object.keys(value).sort();
+    const out = {};
+    const keys = Object.keys(value).sort();
+    for (const key of keys) {
+      const val = value[key];
+      out[key] = val === undefined ? '__undef__' : stableValueForFingerprint(val, seen, depth + 1);
+    }
+    return out;
+  }
+  try { return JSON.stringify(value); }
+  catch { return String(value); }
+}
+
+function fingerprintEntries(list) {
+  try {
+    const canonical = Array.from(list || []).map(entry => stableValueForFingerprint(entry, new WeakSet()));
+    return JSON.stringify(canonical);
+  } catch (err) {
+    try { return `len:${Array.isArray(list) ? list.length : 0}`; }
+    catch { return 'len:0'; }
+  }
+}
 
 function normalizeEntries(list) {
   if (!Array.isArray(list)) return [];
@@ -110,6 +147,7 @@ function selectCharacter(charId, btn){
 
   const label = btn?.querySelector?.('.name')?.textContent?.trim() || cleanId;
   state.myCharId = cleanId;
+  if (state.myReady) setReadyUI(false);
   markSelected(cleanId);
   enableReadyButton(true);
   setDbg(`pick:${cleanId}`);
@@ -134,6 +172,8 @@ export function renderCatalog(entries) {
   if (!state.catalog) state.catalog = { entries: [] };
   state.catalog.entries = list;
   state._pendingCatalog = list;
+  const nextFingerprint = fingerprintEntries(list);
+  const prevFingerprint = state.catalogFingerprint;
 
   const grid = state.els.charGrid;
   if (!grid) return;
@@ -142,6 +182,15 @@ export function renderCatalog(entries) {
 
   // Once the grid is available we can flush any pending catalog into it.
   state._pendingCatalog = null;
+  state.catalogFingerprint = nextFingerprint;
+
+  if (prevFingerprint && nextFingerprint === prevFingerprint && grid.children.length) {
+    markSelected(state.myCharId);
+    if (state.takenChars && state.takenChars.size) markTaken(state.takenChars);
+    enableReadyButton(!!state.myCharId);
+    setDbg(`catalog: ${list.length} entries (unchanged)`);
+    return;
+  }
 
   // Clear and (re)fill
   grid.replaceChildren();
