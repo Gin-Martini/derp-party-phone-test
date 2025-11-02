@@ -1,4 +1,4 @@
-// js/ws.js — thin WS client with IDENTIFY + legacy HELLO
+// js/ws.js — thin WS client with IDENTIFY + legacy HELLO and robust normalizer
 import { state } from './state.js';
 import { SESSION_KEY, ROOM_HINT, NAME_HINT } from './config.js';
 import { setStatus } from './views/ui.js';
@@ -31,10 +31,7 @@ export function clearSession() {
 }
 
 export function wsConnect() {
-  if (!state.session?.wsUrl) {
-    setStatus('No WS URL; join first.');
-    return;
-  }
+  if (!state.session?.wsUrl) { setStatus('No WS URL; join first.'); return; }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   try { ws = new WebSocket(state.session.wsUrl); }
@@ -45,24 +42,20 @@ export function wsConnect() {
   ws.onopen = () => {
     state.connected = true;
     setStatus('Connected');
-    // Send both: modern IDENTIFY and legacy HELLO to trigger host join path
+    // Send modern IDENTIFY and multiple low-risk legacy join triggers
     identify();
-    legacyHello();
+    legacyHelloSuite();
   };
 
-  ws.onclose = () => {
-    state.connected = false;
-    setStatus('Disconnected');
-  };
-
-  ws.onerror = () => setStatus('WS error');
+  ws.onclose = () => { state.connected = false; setStatus('Disconnected'); };
+  ws.onerror  = () => setStatus('WS error');
 
   ws.onmessage = (ev) => {
     let raw; try { raw = JSON.parse(ev.data); } catch { return; }
-    if (!raw || typeof raw !== 'object' || !raw.type) return;
+    if (!raw || typeof raw !== 'object') return;
 
-    // Normalize host envelopes → { type, seq, payload }
     const msg = normalize(raw);
+    if (!msg || !msg.type) return;
     if (typeof msg.seq === 'number') state.lastSeq = msg.seq;
 
     if (window.reduceEnvelope) window.reduceEnvelope(msg);
@@ -74,25 +67,17 @@ function identify() {
   const playerId = state.session?.playerId || undefined;
   const token    = state.session?.token || undefined;
   const name     = state.session?.displayName || NAME_HINT || undefined;
-
   if (!roomId) return;
 
-  send({
-    v: 1,
-    type: 'IDENTIFY',
-    roomId,
-    playerId,
-    payload: { token, lastSeq: state.lastSeq || 0, name, role: 'player' }
-  });
+  send({ v:1, type:'IDENTIFY', roomId, playerId, payload:{ token, lastSeq: state.lastSeq || 0, name, role:'player' } });
 }
 
-// Lowest-risk legacy join trigger (host IntentRouter usually has this)
-function legacyHello() {
+// Fire a few harmless verbs; host will ignore what it doesn’t know.
+function legacyHelloSuite() {
   const name = state.session?.displayName || NAME_HINT || 'Player';
-  // Try the simplest possible intent; safe to ignore if unregistered
-  send({ v:1, type:'HELLO', value:name });
-  // Bonus: some stacks use SET_NAME; safe no-op otherwise
-  send({ v:1, type:'SET_NAME', value:name });
+  send({ v:1, type:'HELLO',    value:name });   // common path to create player
+  send({ v:1, type:'SET_NAME', value:name });   // some stacks use this
+  send({ v:1, type:'JOIN',     payload:{ name }}); // extra nudge if router expects JOIN
 }
 
 export function send(obj) {
@@ -100,18 +85,20 @@ export function send(obj) {
   ws.send(JSON.stringify(obj));
 }
 
-export function saveDirectWsSession({ wsUrl, roomId='', playerId='', token='', displayName='' }) {
-  saveSession({ wsUrl, roomId, playerId, token, displayName });
-}
-
-// Normalize various host shapes (bare DTOs, envelopes) into {type,seq,payload}
+// Normalize host shapes → { type, seq, payload }
+// Accept: canonical envelope, C# StateEnvelope`1, and bare STATE (no payload).
 function normalize(raw) {
-  // Accept canonical directly
-  if (raw.payload || raw.type === 'STATE' || raw.type === 'ROLL_PROMPT' || raw.type === 'ROLL_RESULT' || raw.type === 'SCREEN' || raw.type === 'ERROR') {
+  // Canonical already
+  if (raw && (raw.payload || raw.type === 'STATE' || raw.type === 'ROLL_PROMPT' || raw.type === 'ROLL_RESULT' || raw.type === 'SCREEN' || raw.type === 'ERROR')) {
+    // Bare STATE fallback: host sent fields at top-level (no payload)
+    if (raw.type === 'STATE' && !raw.payload && (raw.phase || raw.me || raw.lobby)) {
+      return { v: raw.v || 1, type:'STATE', seq: raw.seq || 0, payload: raw };
+    }
     return raw;
   }
-  // Envelope class name from C# generic (e.g., "StateEnvelope`1")
-  if (String(raw.type).startsWith('StateEnvelope')) {
+
+  // Generic C# envelope class name (e.g., "StateEnvelope`1")
+  if (String(raw?.type).startsWith('StateEnvelope')) {
     const inner = raw.payload || {};
     return {
       v: inner.v || 1,
@@ -120,6 +107,11 @@ function normalize(raw) {
       payload: inner.payload ?? inner
     };
   }
-  // Fallback: leave as-is; reducer will ignore unknown types
-  return raw;
+
+  // Last-ditch heuristic: looks like a snapshot but has no type
+  if (raw && (raw.phase || raw.me || raw.lobby)) {
+    return { v: 1, type:'STATE', seq: raw.seq || 0, payload: raw };
+  }
+
+  return null;
 }
