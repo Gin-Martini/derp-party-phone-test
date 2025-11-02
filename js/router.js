@@ -729,6 +729,7 @@ function handleBoardRollSnapshot(raw) {
   return true;
 }
 
+// normalize message types (treat BROADCAST_STATE like STATE)
 function normType(t) {
   const s = String(t || '').toUpperCase();
   if (!s) return 'TEXT';
@@ -739,10 +740,7 @@ function normType(t) {
   return s;
 }
 
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
-// js/router.js — replace ONLY this function
+// message handler
 export async function onSocketMessage(msg) {
   try {
     // --- normalize incoming payload (Blob/ArrayBuffer/string/object) ---
@@ -836,7 +834,10 @@ export async function onSocketMessage(msg) {
         if (trip) {
           noteCatalogVersion(payload);
           applyCatalogPatch(trip);
-          commitCatalogRender(state._pendingCatalog?.length ? state._pendingCatalog : state.catalog.entries, { debounce: true });
+          commitCatalogRender(
+            state._pendingCatalog?.length ? state._pendingCatalog : state.catalog.entries,
+            { debounce: true }
+          );
           markHydrated({ version: state.catalogVersion });
         }
         return;
@@ -849,7 +850,10 @@ export async function onSocketMessage(msg) {
         if (trip) {
           noteCatalogVersion(payload);
           applyCatalogPatch(trip);
-          commitCatalogRender(state._pendingCatalog?.length ? state._pendingCatalog : state.catalog.entries, { debounce: true });
+          commitCatalogRender(
+            state._pendingCatalog?.length ? state._pendingCatalog : state.catalog.entries,
+            { debounce: true }
+          );
           markHydrated({ version: state.catalogVersion });
           return;
         }
@@ -860,7 +864,7 @@ export async function onSocketMessage(msg) {
           markHydrated({ version: state.catalogVersion });
           return;
         }
-        // also keep turn/roll responsive even on unknown wrappers
+        // keep turn/roll responsive even on unknown wrappers
         handleTurnOrderSnapshot(payload);
         handleBoardRollSnapshot(payload);
         updateRollOverlayVisibility({ immediateUpdate: true });
@@ -871,7 +875,6 @@ export async function onSocketMessage(msg) {
     console.error('router error', err);
   }
 }
-
 
 setOnSocketMessage(onSocketMessage);
 
