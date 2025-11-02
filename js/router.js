@@ -23,6 +23,130 @@ let lastLobbyVisible = null;
 let lastPhaseValue = state.phase || '';
 let rollOverlayVisible = false;
 
+const BOOLISH_TRUE = new Set([
+  'true', '1', 'yes', 'y', 'on', 'ok', 'okay', 'allow', 'allowed', 'enable', 'enabled',
+  'ready', 'start', 'started', 'go', 'active', 'running', 'prompt',
+  'show', 'showing', 'visible', 'rolling'
+]);
+
+const BOOLISH_FALSE = new Set([
+  'false', '0', 'no', 'n', 'off', 'none', 'null', 'nil', 'inactive', 'disabled',
+  'finished', 'complete', 'completed', 'done', 'closed', 'ended', 'stop', 'stopped',
+  'hidden', 'hide', 'hiding', 'idle', 'wait', 'waitingforothers'
+]);
+
+const ROLL_TEXT_RX = /roll|dice|tap|move|your turn|your go|initiative/i;
+const TURN_TEXT_RX = /turn|order|initiative|round|player|rolling/i;
+
+function toCamelFromSnake(key) {
+  return key.replace(/[_-]([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+function toSnakeFromCamel(key) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-\s]+/g, '_')
+    .toLowerCase();
+}
+
+function readLooseProp(source, key) {
+  if (!source || typeof source !== 'object') return undefined;
+  if (key in source) return source[key];
+  const camel = toCamelFromSnake(String(key));
+  if (camel in source) return source[camel];
+  const snake = toSnakeFromCamel(String(key));
+  if (snake in source) return source[snake];
+  const lower = String(key).toLowerCase();
+  for (const prop of Object.keys(source)) {
+    if (prop.toLowerCase() === lower) return source[prop];
+  }
+  return undefined;
+}
+
+function coerceBoolish(value) {
+  if (value === true) return true;
+  if (value === false) return false;
+  if (value == null) return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const lower = trimmed.toLowerCase();
+    if (BOOLISH_TRUE.has(lower)) return true;
+    if (BOOLISH_FALSE.has(lower)) return false;
+    if (ROLL_TEXT_RX.test(trimmed)) return true;
+    return null;
+  }
+  if (typeof value === 'object') {
+    if ('value' in value) {
+      const nested = coerceBoolish(value.value);
+      if (nested != null) return nested;
+    }
+    if ('enabled' in value) {
+      const nested = coerceBoolish(value.enabled);
+      if (nested != null) return nested;
+    }
+    if ('allow' in value) {
+      const nested = coerceBoolish(value.allow);
+      if (nested != null) return nested;
+    }
+    if ('allowed' in value) {
+      const nested = coerceBoolish(value.allowed);
+      if (nested != null) return nested;
+    }
+    if ('active' in value) {
+      const nested = coerceBoolish(value.active);
+      if (nested != null) return nested;
+    }
+  }
+  return null;
+}
+
+function readBoolish(source, ...keys) {
+  for (const key of keys) {
+    const value = readLooseProp(source, key);
+    if (value === undefined) continue;
+    const bool = coerceBoolish(value);
+    if (bool != null) return bool;
+  }
+  return null;
+}
+
+function stringFrom(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'object') {
+    if ('text' in value) return stringFrom(value.text);
+    if ('message' in value) return stringFrom(value.message);
+    if ('value' in value) return stringFrom(value.value);
+  }
+  return '';
+}
+
+function readStringish(source, ...keys) {
+  for (const key of keys) {
+    const value = readLooseProp(source, key);
+    if (value === undefined) continue;
+    const text = stringFrom(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function textSuggestsRoll(text) {
+  if (!text) return false;
+  return ROLL_TEXT_RX.test(String(text));
+}
+
+function textSuggestsTurn(text) {
+  if (!text) return false;
+  return TURN_TEXT_RX.test(String(text));
+}
+
 function normalizePhase(value) {
   return String(value ?? '').trim().toLowerCase();
 }
@@ -617,13 +741,6 @@ function buildLobbySignature(snapshot, catalogEntries) {
 }
 
 function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
-  if (isLobbyShowing()) {
-    if (rollOverlayVisible) {
-      hideRollOverlay();
-      rollOverlayVisible = false;
-    }
-    return;
-  }
   const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
   const lobbyShowing = isLobbyShowing();
 
@@ -643,6 +760,12 @@ function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
   if (rollOverlayVisible) {
     hideRollOverlay();
     rollOverlayVisible = false;
+  }
+
+  if (lobbyShowing && rollOverlayVisible === false) {
+    // If we were showing the lobby while a roll prompt was pending, ensure it can
+    // stay visible once the prompt clears.
+    maybeSetLobbyVisible(shouldLobbyBeVisible());
   }
 }
 
@@ -830,12 +953,61 @@ function handleTurnOrderSnapshot(raw) {
   const rolled = gatherRolledIds(turnOrder);
 
   const myId = state.playerId ? String(state.playerId) : null;
-  state.inTurnOrder = !!turnOrder.active || !!turnOrder.prompt || !!orderList.length;
-  state.canRollNow = !!turnOrder.canRoll || !!turnOrder.allowRoll || !!turnOrder.prompt;
   if (myId) state.myHasRolled = rolled.has(myId);
 
-  if (turnOrder.phase) maybeSetPhase(turnOrder.phase);
-  if (turnOrder.statusText) updateRollUI({ msg: turnOrder.statusText });
+  const promptText = readStringish(turnOrder, 'prompt', 'promptText', 'message', 'text');
+  const statusText = readStringish(turnOrder, 'statusText', 'status', 'state');
+  const phaseText = readStringish(turnOrder, 'phase', 'stage', 'mode');
+  const titleText = readStringish(turnOrder, 'title', 'heading');
+
+  const detectedCanRoll = readBoolish(
+    turnOrder,
+    'canRoll', 'allowRoll', 'rollAllowed', 'awaitingRoll', 'waitingForRoll', 'waiting_for_roll',
+    'awaitingPlayer', 'awaitingPlayers', 'promptPending', 'promptReady', 'shouldRoll', 'playerCanRoll', 'prompt'
+  );
+  if (detectedCanRoll != null) {
+    state.canRollNow = detectedCanRoll;
+  } else if (textSuggestsRoll(promptText) || textSuggestsRoll(statusText)) {
+    state.canRollNow = true;
+  }
+
+  const detectedActive = readBoolish(
+    turnOrder,
+    'active', 'isActive', 'running', 'inProgress', 'turnActive', 'visible', 'showing', 'show',
+    'turnInProgress', 'turn_in_progress'
+  );
+  if (detectedActive != null) {
+    state.inTurnOrder = detectedActive;
+  } else {
+    const statusLooksLikeTurn = textSuggestsTurn(statusText) || textSuggestsTurn(promptText) || textSuggestsTurn(phaseText);
+    if (orderList.length || state.canRollNow || statusLooksLikeTurn) {
+      state.inTurnOrder = true;
+    } else if (statusText && BOOLISH_FALSE.has(statusText.trim().toLowerCase())) {
+      state.inTurnOrder = false;
+    } else if (phaseText && !textSuggestsTurn(phaseText) && !state.canRollNow && !orderList.length) {
+      state.inTurnOrder = false;
+    }
+  }
+
+  if (phaseText) maybeSetPhase(phaseText);
+
+  if (titleText && state.els.rollTitle) {
+    state.els.rollTitle.textContent = titleText;
+  }
+
+  const normalizedStatus = statusText.trim();
+  const shouldUseStatus = !!normalizedStatus && !/^turn[\s_-]*order$/i.test(normalizedStatus) && normalizedStatus.toLowerCase() !== 'board';
+
+  if (shouldUseStatus) {
+    const ok = textSuggestsRoll(statusText) || !!state.canRollNow;
+    updateRollUI({ msg: statusText, ok });
+  } else if (promptText) {
+    const ok = textSuggestsRoll(promptText) || !!state.canRollNow;
+    updateRollUI({ msg: promptText, ok });
+  } else if (normalizedStatus) {
+    const ok = textSuggestsRoll(statusText) || !!state.canRollNow;
+    updateRollUI({ msg: statusText, ok });
+  }
   if (orderText) updateRollUI({ orderText, ok: true });
 
   updateRollOverlayVisibility({ immediateUpdate: true });
@@ -844,9 +1016,19 @@ function handleTurnOrderSnapshot(raw) {
 
 function handleBoardRollSnapshot(raw) {
   if (!raw || typeof raw !== 'object') return false;
-  const allow = raw.canRoll || raw.allowRoll || raw.rollAllowed || raw.prompt === true;
-  const prompt = typeof raw.prompt === 'string' ? raw.prompt : raw.message || raw.text;
-  const title = raw.title || raw.heading || 'Roll';
+
+  const prompt = readStringish(raw, 'prompt', 'promptText', 'message', 'text', 'statusText');
+  const title = readStringish(raw, 'title', 'heading') || 'Roll';
+  const detectedAllow = readBoolish(
+    raw,
+    'canRoll', 'allowRoll', 'rollAllowed', 'allow', 'enabled', 'can_roll', 'allow_roll', 'roll_allowed',
+    'awaitingRoll', 'waitingForRoll', 'promptPending', 'shouldRoll', 'playerCanRoll', 'prompt'
+  );
+  let allow = detectedAllow;
+  if (allow == null && textSuggestsRoll(prompt)) allow = true;
+
+  if (allow == null) return false;
+
   let lobbyShowing = isLobbyShowing();
 
   const myId = state.playerId ? String(state.playerId) : null;
@@ -855,7 +1037,8 @@ function handleBoardRollSnapshot(raw) {
 
   if (allow) {
     state.canRollNow = true;
-    state.inTurnOrder = !!raw.turnOrder;
+    state.inTurnOrder = state.inTurnOrder || !!raw.turnOrder;
+    if (state.els.rollTitle) state.els.rollTitle.textContent = title;
     if (lobbyShowing) {
       maybeSetLobbyVisible(false);
       lobbyShowing = isLobbyShowing();
