@@ -1,8 +1,6 @@
-// Central endpoints for GitHub Pages client
-export const BASE      = 'https://derpparty-relay.fly.dev';
-export const HTTP_BASE = BASE;
-export const WS_URL    = BASE.replace('https','wss') + '/socket';
+// Resolve server bases from URL or defaults.
+const url = new URL(location.href);
+export const API_BASE = (url.searchParams.get('api') || '').replace(/\/+$/,'') || 'http://localhost:8080';
+export const WS_BASE  = (url.searchParams.get('ws')  || '').replace(/\/+$/,'') || 'ws://localhost:8080';
 
-export const SESSION_KEY = 'dp.session.v2';
-export const TERMINAL_CLOSE_CODES = new Set([4000,4001,4002,4003,4401,4403,4410,4411]);
-export const backoff = (n) => Math.min(15000, 500 * Math.pow(1.8, n)) + Math.floor(Math.random()*150);
+export const STORAGE_KEY = 'derp.session.v1';
