@@ -182,6 +182,11 @@ function selectCharacter(charId, btn){
 export function renderCatalog(entries) {
   const list = normalizeEntries(entries);
 
+  if ((!list || list.length === 0) && grid.children && grid.children.length) {
+    setDbg('catalog: ignore empty tick');
+    return;
+  }
+    
   if (!state.catalog) state.catalog = { entries: [] };
   state.catalog.entries = list;
   state._pendingCatalog = list;
