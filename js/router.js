@@ -557,6 +557,7 @@ function commitCatalogRender(list, { debounce = false } = {}) {
   const doRender = () => {
     renderCatalog(list);
     if (rollOverlayVisible) updateRollUI();
+    if (Array.isArray(list) && list.length) maybeSetLobbyVisible(true);
   };
 
   if (debounce) {
