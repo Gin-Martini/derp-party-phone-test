@@ -1,19 +1,13 @@
-// Resolve bases from URL or sensible defaults.
-// Supports API mode (?api=...) and Relay-direct mode (?ws=...).
-const url = new URL(location.href);
+// js/config.js — defaults for public shareable URL
+const QS = new URLSearchParams(location.search);
 
+// Default to your Join API; override with ?api= if needed.
 export const API_BASE =
-  (url.searchParams.get('api') || '').replace(/\/+$/,'') || '';
+  QS.get('api') ||
+  'https://derpparty-join.fly.dev';
 
-export const WS_BASE =
-  (url.searchParams.get('wsbase') || '').replace(/\/+$/,'') || '';
+// Optional: direct WS override for debugging (?ws=wss://…/socket)
+export const WS_OVERRIDE = QS.get('ws') || '';
 
-// Relay-direct: if present, we skip HTTP join entirely.
-export const DIRECT_WS = (url.searchParams.get('ws') || '').trim();
-
-// Optional hints (used in IDENTIFY during direct mode)
-export const ROOM_HINT = (url.searchParams.get('room') || '').trim();
-export const NAME_HINT = (url.searchParams.get('name') || '').trim();
-export const PID_HINT  = (url.searchParams.get('pid')  || '').trim();
-
-export const STORAGE_KEY = 'derp.session.v1';
+// Session cache key
+export const SESSION_KEY = 'derpParty.v1';
