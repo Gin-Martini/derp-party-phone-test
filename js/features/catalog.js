@@ -33,13 +33,25 @@ function stableValueForFingerprint(value, seen, depth = 0) {
   catch { return String(value); }
 }
 
+// --- replace existing fingerprintEntries with this stable version ---
 function fingerprintEntries(list) {
   try {
-    const canonical = Array.from(list || []).map(entry => stableValueForFingerprint(entry, new WeakSet()));
-    return JSON.stringify(canonical);
-  } catch (err) {
-    try { return `len:${Array.isArray(list) ? list.length : 0}`; }
-    catch { return 'len:0'; }
+    const stable = Array.from(list || []).map((entry) => {
+      const raw = entry?.raw || entry || {};
+      const id =
+        String(entry?.id ??
+               raw.id ?? raw.characterId ?? raw.key ?? raw.slug ?? raw.code ?? '');
+      const label = String(raw.label ?? raw.name ?? raw.title ?? id);
+      // Use the same portrait resolver the renderer uses so hashes match reality
+      const portrait = resolvePortraitSrc({
+        url: raw.portraitUrl ?? raw.imageUrl,
+        data: raw.portraitData ?? raw.portrait
+      });
+      return `${id}|${label}|${portrait}`;
+    });
+    return JSON.stringify(stable);
+  } catch {
+    return `len:${Array.isArray(list) ? list.length : 0}`;
   }
 }
 
@@ -166,6 +178,7 @@ function selectCharacter(charId, btn){
   try { wsSend({ type: 'SELECT_CHARACTER', ...base }); } catch {}
 }
 
+// --- in renderCatalog(entries), add the empty-tick guard right after list normalization ---
 export function renderCatalog(entries) {
   const list = normalizeEntries(entries);
 
@@ -177,6 +190,12 @@ export function renderCatalog(entries) {
   if (!grid) return;
 
   attachCatalogHandlers();
+
+  // NEW: ignore transient empty ticks to prevent flicker
+  if ((!list || list.length === 0) && grid.children && grid.children.length) {
+    setDbg('catalog: ignore empty tick');
+    return;
+  }
 
   const nextFingerprint = fingerprintEntries(list);
   const prevFingerprint = state.catalogFingerprint;
@@ -193,7 +212,7 @@ export function renderCatalog(entries) {
   }
 
   state.catalogFingerprint = nextFingerprint;
-
+  
   const existing = new Map();
   grid.querySelectorAll('.charBtn').forEach((btn) => {
     const id = btn?.dataset?.charId;
