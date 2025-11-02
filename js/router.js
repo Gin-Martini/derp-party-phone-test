@@ -943,9 +943,10 @@ function mergeState(snapshot, { debounceCatalog = false } = {}) {
   const lobbyRoot = snapshot.lobby || snapshot;
   const playerCount = countPlayers(lobbyRoot);
   const lobbySignature = buildLobbySignature(lobbyRoot, pendingEntries || []);
+  const lobbyVisible = isLobbyShowing();
   if (lobbySignature) {
     if (shouldLobbyBeVisible(snapshot)) {
-      if (state._lobbySignature !== lobbySignature) {
+      if (state._lobbySignature !== lobbySignature || !lobbyVisible) {
         maybeSetLobbyVisible(true);
       }
     } else {
