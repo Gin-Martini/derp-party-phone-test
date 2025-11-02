@@ -113,6 +113,23 @@ function scheduleHydrateKick(delay = HYDRATE_KICK_DELAY_MS) {
   }, delay);
 }
 
+function requestRehydrateSoon(reason = 'hello', delay = HYDRATE_KICK_DELAY_MS) {
+  const hasCatalog = Array.isArray(state._pendingCatalog) && state._pendingCatalog.length;
+  const hasRenderedCatalog = Array.isArray(state.catalog?.entries) && state.catalog.entries.length;
+  if ((hasCatalog || hasRenderedCatalog) && state.hydrated) return;
+
+  if (hydrateKickTimer) {
+    clearTimeout(hydrateKickTimer);
+    hydrateKickTimer = 0;
+  }
+
+  const wait = Number.isFinite(delay) ? Math.max(50, delay) : HYDRATE_KICK_DELAY_MS;
+  hydrateKickTimer = setTimeout(() => {
+    hydrateKickTimer = 0;
+    requestHydrateBurst(reason || 'kick');
+  }, wait);
+}
+
 // ---------------------------------------------------------------------------
 // Message de-dupe helpers
 // ---------------------------------------------------------------------------
@@ -154,6 +171,10 @@ function shouldProcessMessage(raw) {
     for (let i = 0; i < trim; i++) seenMessages.delete(keys[i]);
   }
   return true;
+}
+
+function isDuplicate(raw) {
+  return !shouldProcessMessage(raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +572,10 @@ function applyCatalogPatch(trip) {
     for (const e of list) if (!removes.includes(String(e.id))) keep.push(e);
     state.catalog.entries = keep;
   }
+
+  if (Array.isArray(state.catalog.entries)) {
+    state._pendingCatalog = [...state.catalog.entries];
+  }
 }
 
 function commitCatalogRender(list, { debounce = false } = {}) {
@@ -760,7 +785,7 @@ export async function onSocketMessage(msg) {
     }
 
     // --- de-dupe identical messages ---
-    if (isDup(raw)) return;
+    if (isDuplicate(raw)) return;
 
     const type = normType(raw?.type || raw?.msg || raw?.kind || raw?.messageType);
 
@@ -768,6 +793,17 @@ export async function onSocketMessage(msg) {
       case 'HELLO': {
         ensureLobbyShown();
         requestRehydrateSoon('hello');
+        return;
+      }
+
+      case 'WS_OPEN': {
+        ensureLobbyShown();
+        requestRehydrateSoon('ws-open', 120);
+        return;
+      }
+
+      case 'WS_RETRY': {
+        requestRehydrateSoon('ws-retry', HYDRATE_KICK_DELAY_MS);
         return;
       }
 
