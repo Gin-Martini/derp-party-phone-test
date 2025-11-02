@@ -133,6 +133,34 @@ function requestRehydrateSoon(reason = 'hello', delay = HYDRATE_KICK_DELAY_MS) {
 // ---------------------------------------------------------------------------
 // Message de-dupe helpers
 // ---------------------------------------------------------------------------
+function hasPatchOperations(source) {
+  if (!source || typeof source !== 'object') return false;
+  const seen = new Set();
+  const queue = [source];
+  const PATCH_OP_KEYS = ['add', 'update', 'remove', 'ops', 'patches', 'operations', 'changes', 'diff', 'delta', 'apply', 'values'];
+  while (queue.length && seen.size < 100) {
+    const node = queue.shift();
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+
+    if (Array.isArray(node)) {
+      if (node.length) return true;
+      continue;
+    }
+
+    for (const key of PATCH_OP_KEYS) {
+      if (!(key in node)) continue;
+      const value = node[key];
+      if (Array.isArray(value) && value.length) return true;
+      if (value && typeof value === 'object') queue.push(value);
+    }
+
+    const nested = node.patch || node.delta || node.payload || node.data;
+    if (nested && typeof nested === 'object') queue.push(nested);
+  }
+  return false;
+}
+
 function buildMessageKey(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const type = String(raw.type || raw.msgType || raw.kind || '').toUpperCase();
@@ -147,15 +175,26 @@ function buildMessageKey(raw) {
     if (!source || typeof source !== 'object') continue;
     const start = source.patchStart ?? source.start ?? source.rangeStart ?? source.from;
     const end = source.patchEnd ?? source.end ?? source.rangeEnd ?? source.to;
-    if (start !== undefined || end !== undefined) return `${type}|patch:${start ?? ''}-${end ?? ''}`;
+    if (start !== undefined || end !== undefined) {
+      const hasOps = hasPatchOperations(source) ? '1' : '0';
+      const part = source.patchPart ?? source.part ?? source.segment ?? source.chunk ?? source.batch ?? '';
+      return `${type}|patch:${start ?? ''}-${end ?? ''}|ops:${hasOps}${part ? `|part:${part}` : ''}`;
+    }
     const range = source.patchRange ?? source.range;
     if (range && typeof range === 'object') {
       const rs = range.start ?? range.from ?? range.begin ?? range[0];
       const re = range.end ?? range.to ?? range.finish ?? range[1];
-      if (rs !== undefined || re !== undefined) return `${type}|patch:${rs ?? ''}-${re ?? ''}`;
+      if (rs !== undefined || re !== undefined) {
+        const hasOps = hasPatchOperations(source) ? '1' : '0';
+        const part = source.patchPart ?? source.part ?? source.segment ?? source.chunk ?? source.batch ?? '';
+        return `${type}|patch:${rs ?? ''}-${re ?? ''}|ops:${hasOps}${part ? `|part:${part}` : ''}`;
+      }
     }
     const ids = source.patchIds ?? source.ids;
-    if (Array.isArray(ids) && ids.length) return `${type}|patchIds:${ids.join(',')}`;
+    if (Array.isArray(ids) && ids.length) {
+      const hasOps = hasPatchOperations(source) ? '1' : '0';
+      return `${type}|patchIds:${ids.join(',')}|ops:${hasOps}`;
+    }
   }
   return null;
 }
