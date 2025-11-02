@@ -960,6 +960,9 @@ function handleTurnOrderSnapshot(raw) {
   const phaseText = readStringish(turnOrder, 'phase', 'stage', 'mode');
   const titleText = readStringish(turnOrder, 'title', 'heading');
 
+  const promptSuggestsRoll = textSuggestsRoll(promptText);
+  const statusSuggestsRoll = textSuggestsRoll(statusText);
+
   const detectedCanRoll = readBoolish(
     turnOrder,
     'canRoll', 'allowRoll', 'rollAllowed', 'awaitingRoll', 'waitingForRoll', 'waiting_for_roll',
@@ -967,8 +970,10 @@ function handleTurnOrderSnapshot(raw) {
   );
   if (detectedCanRoll != null) {
     state.canRollNow = detectedCanRoll;
-  } else if (textSuggestsRoll(promptText) || textSuggestsRoll(statusText)) {
+  } else if (promptSuggestsRoll || statusSuggestsRoll) {
     state.canRollNow = true;
+  } else {
+    state.canRollNow = false;
   }
 
   const detectedActive = readBoolish(
