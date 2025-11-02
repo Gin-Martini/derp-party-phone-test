@@ -45,6 +45,7 @@ export function resetToLobbyUi(){
   state.catalog = null;
   state._pendingCatalog = null;
   state.catalogFingerprint = null;
+  state._lastRehydrateAt = 0;
 
   state.myCharId = null;
   state.takenChars?.clear?.();

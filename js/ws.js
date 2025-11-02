@@ -75,7 +75,26 @@ export function cancelReconnect(){
 }
 
 // rehydrate helpers
-function requestRehydrate(){
+const REHYDRATE_MIN_INTERVAL_MS = 1400;
+
+function hasCatalogContent(){
+  if (Array.isArray(state._pendingCatalog) && state._pendingCatalog.length) return true;
+  if (Array.isArray(state.catalog?.entries) && state.catalog.entries.length) return true;
+  const grid = state.els.charGrid;
+  if (grid && grid.querySelector('.charBtn')) return true;
+  return false;
+}
+
+function requestRehydrate(force = false){
+  if (!force) {
+    if (hasCatalogContent()) return;
+    const now = Date.now();
+    if (state._lastRehydrateAt && (now - state._lastRehydrateAt) < REHYDRATE_MIN_INTERVAL_MS) return;
+    state._lastRehydrateAt = now;
+  } else {
+    state._lastRehydrateAt = Date.now();
+  }
+
   wsSend({ type:'REQUEST_SNAPSHOT' });
   wsSend({ type:'REQUEST_CATALOG' });
   wsSend({ type:'LOBBY_SNAPSHOT' });
@@ -205,4 +224,4 @@ function endSession(reason='Disconnected'){
 }
 
 // console helper
-if (typeof window !== 'undefined') window.dpRehydrate = () => requestRehydrate();
+if (typeof window !== 'undefined') window.dpRehydrate = (force = true) => requestRehydrate(force);
