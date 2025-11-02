@@ -82,7 +82,6 @@ export function updateRollUI({ value, msg, orderText, ok } = {}){
 export function showRollOverlay({ title = 'Roll', prompt = 'Waiting…' } = {}){
   const { rollPanel, rollTitle, rollValue, rollState, orderResult } = state.els;
   if (!rollPanel || !rollTitle || !rollValue || !rollState) return;
-  if (state.phase === 'lobby') return;
 
   rollTitle.textContent = title;
   setText(rollState, prompt, { ok: false });

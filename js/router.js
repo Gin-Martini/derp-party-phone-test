@@ -19,9 +19,65 @@ let hydrateAttempts = 0;
 let catalogRenderTimer = 0;
 
 const seenMessages = new Map();
-let lastLobbyVisible = false;
+let lastLobbyVisible = null;
 let lastPhaseValue = state.phase || '';
 let rollOverlayVisible = false;
+
+function normalizePhase(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function isLobbyPhaseValue(value) {
+  const phase = normalizePhase(value);
+  if (!phase) return true;
+  if (phase === 'lobby' || phase === 'character_select' || phase === 'setup') return true;
+  return phase.includes('lobby');
+}
+
+function isPlayPhaseValue(value) {
+  const phase = normalizePhase(value);
+  if (!phase) return false;
+  if (phase === 'turn_order' || phase === 'turnorder' || phase === 'turn-order') return true;
+  if (phase === 'board' || phase === 'in_game' || phase === 'game' || phase === 'playing') return true;
+  if (phase.includes('turn') && phase.includes('order')) return true;
+  if (phase.includes('board')) return true;
+  if (phase.includes('game') && !phase.includes('lobby')) return true;
+  return false;
+}
+
+function snapshotHintsAtPlay(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  if (snapshot.turnOrder || snapshot.turn_order) return true;
+  if (snapshot.board || snapshot.boardState || snapshot.board_state) return true;
+  if (snapshot.canRoll || snapshot.allowRoll || snapshot.rollAllowed || snapshot.prompt === true) return true;
+  const prompt = snapshot.prompt || snapshot.message || snapshot.text || snapshot.statusText;
+  if (prompt && /roll/i.test(String(prompt))) return true;
+  const phaseValue = snapshot.phase ?? snapshot.stage ?? snapshot.status ?? snapshot.state ?? snapshot.mode;
+  return isPlayPhaseValue(phaseValue);
+}
+
+function shouldLobbyBeVisible(snapshot = null) {
+  if (snapshot && snapshotHintsAtPlay(snapshot)) return false;
+  if (snapshot) {
+    const snapshotPhase = snapshot.phase ?? snapshot.stage ?? snapshot.status ?? snapshot.state ?? snapshot.mode;
+    if (isLobbyPhaseValue(snapshotPhase)) return true;
+  }
+  if (state.inTurnOrder || state.canRollNow) return false;
+  const phaseValue = lastPhaseValue || state.phase;
+  return isLobbyPhaseValue(phaseValue);
+}
+
+function isLobbyShowing(){
+  const lobbyEl = state.els?.lobbyArea;
+  if (lobbyEl?.classList) {
+    const visible = !lobbyEl.classList.contains('hidden');
+    lastLobbyVisible = visible;
+    return visible;
+  }
+  if (typeof lastLobbyVisible === 'boolean') return lastLobbyVisible;
+  const phase = String(state.phase || '').toLowerCase();
+  return phase === 'lobby';
+}
 
 function maybeSetPhase(next){
   if (!next) return;
@@ -36,6 +92,7 @@ function maybeSetPhase(next){
 // ---------------------------------------------------------------------------
 function maybeSetLobbyVisible(on) {
   const flag = !!on;
+  if (flag && !shouldLobbyBeVisible()) return;
   if (lastLobbyVisible === flag) return;
   lastLobbyVisible = flag;
   setLobbyVisible(flag);
@@ -561,17 +618,24 @@ function buildLobbySignature(snapshot, catalogEntries) {
 
 function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
   const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
+  const lobbyShowing = isLobbyShowing();
+
   if (shouldShow) {
+    if (lobbyShowing) {
+      maybeSetLobbyVisible(false);
+      hideJoinCard();
+    }
     if (!rollOverlayVisible) {
       showRollOverlay();
       rollOverlayVisible = true;
     }
     if (immediateUpdate) updateRollUI();
-  } else if (rollOverlayVisible) {
+    return;
+  }
+
+  if (rollOverlayVisible) {
     hideRollOverlay();
     rollOverlayVisible = false;
-  } else if (immediateUpdate && rollOverlayVisible) {
-    updateRollUI();
   }
 }
 
@@ -621,7 +685,7 @@ function commitCatalogRender(list, { debounce = false } = {}) {
   const doRender = () => {
     renderCatalog(list);
     if (rollOverlayVisible) updateRollUI();
-    if (Array.isArray(list) && list.length) maybeSetLobbyVisible(true);
+    if (Array.isArray(list) && list.length && shouldLobbyBeVisible()) maybeSetLobbyVisible(true);
   };
 
   if (debounce) {
@@ -669,7 +733,7 @@ function applyCatalogSnapshot(entries, { options = null, force = false, version 
 
   if (nextList.length) {
     commitCatalogRender(nextList, { debounce });
-    maybeSetLobbyVisible(true);
+    if (shouldLobbyBeVisible()) maybeSetLobbyVisible(true);
   }
 
   if (version) {
@@ -735,8 +799,12 @@ function mergeState(snapshot, { debounceCatalog = false } = {}) {
   const playerCount = countPlayers(lobbyRoot);
   const lobbySignature = buildLobbySignature(lobbyRoot, pendingEntries || []);
   if (lobbySignature) {
-    if (state._lobbySignature !== lobbySignature) {
-      maybeSetLobbyVisible(true);
+    if (shouldLobbyBeVisible(snapshot)) {
+      if (state._lobbySignature !== lobbySignature) {
+        maybeSetLobbyVisible(true);
+      }
+    } else {
+      maybeSetLobbyVisible(false);
     }
     state._lobbySignature = lobbySignature;
   }
@@ -772,6 +840,7 @@ function handleBoardRollSnapshot(raw) {
   const allow = raw.canRoll || raw.allowRoll || raw.rollAllowed || raw.prompt === true;
   const prompt = typeof raw.prompt === 'string' ? raw.prompt : raw.message || raw.text;
   const title = raw.title || raw.heading || 'Roll';
+  let lobbyShowing = isLobbyShowing();
 
   const myId = state.playerId ? String(state.playerId) : null;
   const rolled = gatherRolledIds(raw);
@@ -780,9 +849,18 @@ function handleBoardRollSnapshot(raw) {
   if (allow) {
     state.canRollNow = true;
     state.inTurnOrder = !!raw.turnOrder;
-    showRollOverlay({ title, prompt: prompt || 'Tap ROLL to move.' });
+    if (lobbyShowing) {
+      maybeSetLobbyVisible(false);
+      lobbyShowing = isLobbyShowing();
+    }
+    if (!lobbyShowing) {
+      showRollOverlay({ title, prompt: prompt || 'Tap ROLL to move.' });
+      rollOverlayVisible = true;
+    } else {
+      hideRollOverlay();
+      rollOverlayVisible = false;
+    }
     updateRollUI({ msg: prompt || 'Tap ROLL to move.' });
-    rollOverlayVisible = true;
   } else {
     state.canRollNow = false;
     if (!state.inTurnOrder) hideRollOverlay();
