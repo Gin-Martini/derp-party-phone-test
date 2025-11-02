@@ -21,6 +21,7 @@ export const state = {
   myReady: false,
   myCharId: null,
   takenChars: new Set(),
+  _lastRehydrateAt: 0,
 
   // turn / roll
   myHasRolled: false,
