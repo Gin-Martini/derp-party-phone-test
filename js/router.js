@@ -3,12 +3,105 @@ import { state } from './state.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
 import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
+import { wsSend, setOnSocketMessage, ensureHydrateRequest } from './ws.js?v=11.0.12';
 
 // ---------- tiny helpers ----------
 const ensureLobbyShown = () => { setLobbyVisible(true); setPhase && setPhase('lobby'); };
 const A = (x) => Array.isArray(x) ? x : (x ? [x] : []);
 const U = (s) => String(s || '').toUpperCase();
+
+const VERSION_KEY_HINTS = ['catalogVersion', 'catalog_version'];
+
+function toCatalogVersion(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  return null;
+}
+
+function sniffCatalogVersion(source, seen = new Set(), depth = 0) {
+  if (!source || typeof source !== 'object' || seen.has(source) || depth > 4) return null;
+  seen.add(source);
+
+  if (Array.isArray(source)) {
+    for (const item of source) {
+      const found = sniffCatalogVersion(item, seen, depth + 1);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  for (const key of VERSION_KEY_HINTS) {
+    if (key in source && source[key] != null) return source[key];
+  }
+
+  if (source.catalog && typeof source.catalog === 'object') {
+    const nested = sniffCatalogVersion(source.catalog, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.meta && typeof source.meta === 'object') {
+    const nested = sniffCatalogVersion(source.meta, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.header && typeof source.header === 'object') {
+    const nested = sniffCatalogVersion(source.header, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.stateHeader && typeof source.stateHeader === 'object') {
+    const nested = sniffCatalogVersion(source.stateHeader, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.envelope && typeof source.envelope === 'object') {
+    const nested = sniffCatalogVersion(source.envelope, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.payload && typeof source.payload === 'object') {
+    const nested = sniffCatalogVersion(source.payload, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.data && typeof source.data === 'object') {
+    const nested = sniffCatalogVersion(source.data, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.body && typeof source.body === 'object') {
+    const nested = sniffCatalogVersion(source.body, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+  if (source.state && typeof source.state === 'object' && source.state !== source) {
+    const nested = sniffCatalogVersion(source.state, seen, depth + 1);
+    if (nested != null) return nested;
+  }
+
+  if (source.version != null) {
+    const hint = String(source.type || source.kind || source.msgType || '').toUpperCase();
+    if (!hint || hint.includes('CATALOG') || hint.includes('LOBBY')) return source.version;
+  }
+
+  return null;
+}
+
+function noteCatalogVersion(...sources) {
+  for (const source of sources) {
+    if (!source) continue;
+    const raw = sniffCatalogVersion(source);
+    const normalized = toCatalogVersion(raw);
+    if (!normalized) continue;
+    const prevHydrated = state._hydratedVersion;
+    if (state.catalogVersion !== normalized) {
+      state.catalogVersion = normalized;
+      if (prevHydrated && prevHydrated !== normalized) {
+        state.hydrated = false;
+        state._rehydrateRequested = false;
+        state._rehydrateRequestedVersion = null;
+      }
+    }
+    return normalized;
+  }
+  return null;
+}
 
 const normType = (t) => {
   const s = U(t);
@@ -40,7 +133,17 @@ function mergeState(s) {
   if (cat && Array.isArray(cat.entries) && cat.entries.length) {
     setLobbyVisible(true);
     renderCatalog(cat);
+    const version = noteCatalogVersion(cat, s);
+    const normalizedVersion = toCatalogVersion(version ?? state.catalogVersion);
+    if (normalizedVersion) {
+      state.catalogVersion = normalizedVersion;
+      state._hydratedVersion = normalizedVersion;
+    } else if (state.catalogVersion) {
+      state._hydratedVersion = state.catalogVersion;
+    }
     state.hydrated = true;
+    state._rehydrateRequested = false;
+    state._rehydrateRequestedVersion = null;
   }
 }
 
@@ -51,7 +154,17 @@ function handleCatalogMessage(msg) {
     state.catalog = cat;
     setLobbyVisible(true);
     renderCatalog(cat);
+    const version = noteCatalogVersion(cat, msg);
+    const normalizedVersion = toCatalogVersion(version ?? state.catalogVersion);
+    if (normalizedVersion) {
+      state.catalogVersion = normalizedVersion;
+      state._hydratedVersion = normalizedVersion;
+    } else if (state.catalogVersion) {
+      state._hydratedVersion = state.catalogVersion;
+    }
     state.hydrated = true;
+    state._rehydrateRequested = false;
+    state._rehydrateRequestedVersion = null;
   }
 }
 
@@ -491,7 +604,7 @@ function setDbg(s) {
   if (pill) pill.textContent = `last: ${s}`;
 }
 
-function applyCatalogSnapshot(entries, { force = false } = {}) {
+function applyCatalogSnapshot(entries, { force = false, version = null } = {}) {
   const currentCount = Array.isArray(state.catalog?.entries) ? state.catalog.entries.length : 0;
   const explicit = entries !== undefined && entries !== null;
   const nextList = Array.isArray(entries) ? entries : [];
@@ -518,6 +631,16 @@ function applyCatalogSnapshot(entries, { force = false } = {}) {
 
   ensureLobbyShown();
   renderCatalog(nextList);
+  const normalizedVersion = toCatalogVersion(version ?? state.catalogVersion);
+  if (normalizedVersion) {
+    state.catalogVersion = normalizedVersion;
+    state._hydratedVersion = normalizedVersion;
+  } else if (state.catalogVersion) {
+    state._hydratedVersion = state.catalogVersion;
+  }
+  state.hydrated = true;
+  state._rehydrateRequested = false;
+  state._rehydrateRequestedVersion = null;
   return true;
 }
 
@@ -567,14 +690,18 @@ export async function onSocketMessage(msg){
         ensureLobbyShown();
         if (raw.playerId) state.playerId = raw.playerId;
         if (raw.roomId) state.roomId = raw.roomId;
-        // Ask host to rehydrate us
-        wsSend && wsSend({ type: 'REQUEST_SNAPSHOT' });
-        wsSend && wsSend({ type: 'REQUEST_CATALOG' });
+        state.hydrated = false;
+        state._hydratedVersion = null;
+        state._rehydrateRequested = false;
+        state._rehydrateRequestedVersion = null;
+        // Ask host to rehydrate us once
+        ensureHydrateRequest();
         return;
       }
 
       case 'CHARACTER_CATALOG': {
         const p = raw.payload || raw.data || raw;
+        const version = noteCatalogVersion(p, raw);
 
         // Try all known shapes
         let entries = Array.isArray(p?.entries) ? p.entries
@@ -589,18 +716,19 @@ export async function onSocketMessage(msg){
 
         // Only apply if we actually have entries; otherwise ignore (prevents wipe)
         if (Array.isArray(entries) && entries.length) {
-          applyCatalogSnapshot(entries, { force: true });
+          applyCatalogSnapshot(entries, { force: true, version });
         }
         return;
       }
 
       case 'CHARACTER_CATALOG_PATCH': {
         const pack = raw.payload || raw.data || raw;
+        const version = noteCatalogVersion(pack, raw);
         const trip = findPatchTriplet(pack);
         if (trip) {
           if (!state.catalog) state.catalog = { entries: [] };
           applyCatalogPatch(trip);
-          applyCatalogSnapshot(state.catalog.entries, { force: true });
+          applyCatalogSnapshot(state.catalog.entries, { force: true, version });
         }
         return;
       }
@@ -610,6 +738,7 @@ export async function onSocketMessage(msg){
         const header = env.header || env.stateHeader || {};
         const body   = env.payload || env.state || env.data || {};
         const typed  = normType(header.type || header.typeName || body.type || body.subtype);
+        const version = noteCatalogVersion(body, header, env);
 
         // 1) Full catalog embedded in body
         if (typed === 'CHARACTER_CATALOG' || Array.isArray(body.entries)) {
@@ -624,7 +753,7 @@ export async function onSocketMessage(msg){
             const fallback = extractCatalogEntries(body);
             if (Array.isArray(fallback)) entries = fallback;
           }
-          applyCatalogSnapshot(entries, { force: true });
+          applyCatalogSnapshot(entries, { force: true, version });
           return;
         }
 
@@ -636,7 +765,8 @@ export async function onSocketMessage(msg){
             const trip = findPatchTriplet(pack);
             if (trip) applyCatalogPatch(trip);
           }
-          applyCatalogSnapshot(state.catalog.entries, { force: true });
+          const patchVersion = noteCatalogVersion(env, header, body) || version;
+          applyCatalogSnapshot(state.catalog.entries, { force: true, version: patchVersion });
           return;
         }
 
@@ -645,11 +775,12 @@ export async function onSocketMessage(msg){
         if (trip) {
           if (!state.catalog) state.catalog = { entries: [] };
           applyCatalogPatch(trip);
-          applyCatalogSnapshot(state.catalog.entries, { force: true });
+          const tripVersion = noteCatalogVersion(trip, env, header, body) || version;
+          applyCatalogSnapshot(state.catalog.entries, { force: true, version: tripVersion });
           return;
         }
 
-        if (tryConsumeCatalog(env, { force: false })) return;
+        if (tryConsumeCatalog(env, { force: false, version })) return;
         if (handleTurnOrderFallback(type, env) || handleBoardRollFallback(type, env)) return;
 
         return;
@@ -732,16 +863,18 @@ export async function onSocketMessage(msg){
         if (handleTurnOrderFallback(type, raw) || handleBoardRollFallback(type, raw)) return;
         // Unknowns: try defensive render if entries exist
         const p = raw.payload || raw.data || raw;
+        const version = noteCatalogVersion(p, raw);
         if (p && Array.isArray(p.entries)) {
-          applyCatalogSnapshot(p.entries, { force: true });
+          applyCatalogSnapshot(p.entries, { force: true, version });
         } else {
           const trip = findPatchTriplet(raw);
           if (trip) {
             if (!state.catalog) state.catalog = { entries: [] };
             applyCatalogPatch(trip);
-            applyCatalogSnapshot(state.catalog.entries, { force: true });
+            const tripVersion = noteCatalogVersion(trip, raw) || version;
+            applyCatalogSnapshot(state.catalog.entries, { force: true, version: tripVersion });
           } else {
-            tryConsumeCatalog(raw);
+            tryConsumeCatalog(raw, { version, force: false });
           }
         }
         return;

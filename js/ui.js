@@ -45,6 +45,12 @@ export function resetToLobbyUi(){
   state.catalog = null;
   state._pendingCatalog = null;
   state.catalogFingerprint = null;
+  state.catalogVersion = null;
+  state.hydrated = false;
+  state._hydratedVersion = null;
+  state._rehydrateRequested = false;
+  state._rehydrateRequestedVersion = null;
+  if (state._rehydrateTimer) { clearTimeout(state._rehydrateTimer); state._rehydrateTimer = 0; }
   state._lastRehydrateAt = 0;
 
   state.myCharId = null;
