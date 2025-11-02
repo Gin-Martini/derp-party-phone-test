@@ -1,9 +1,9 @@
 // js/router.js — FULL FILE (deduped, no HTML)
-import { state } from './state.js?v=11.0.13';
-import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.13';
-import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.13';
-import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.13';
-import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.13';
+import { state } from './state.js?v=11.0.12';
+import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
+import { setStatus, setLobbyVisible, setPhase, hideJoinCard } from './ui.js?v=11.0.12';
+import { showRollOverlay, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
+import { wsSend, setOnSocketMessage } from './ws.js?v=11.0.12';
 
 // ---------------------------------------------------------------------------
 // Hydration + dedupe guards (SINGLE COPY)
