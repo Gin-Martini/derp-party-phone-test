@@ -1,64 +1,59 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-    <meta http-equiv="Pragma" content="no-cache" />
-    <meta http-equiv="Expires" content="0" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Derp Party – Phone (Lobby)</title>
-    <link rel="preload" href="./app.css?v=10.0.1" as="style">
-    <link rel="stylesheet" href="./app.css?v=10.0.1">
-  </head>
-  <body>
-    <div class="wrap">
-      <h3>Derp Party – Phone</h3>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Derp Party — Phone</title>
+  <link rel="stylesheet" href="./css/styles.css?v=1.0.0">
+</head>
+<body>
+  <header id="topbar">
+    <div id="status">Disconnected</div>
+  </header>
 
-      <div class="card" id="joinCard">
-        <label>Room Code</label>
-        <input id="room" placeholder="e.g. ABC123" autocomplete="one-time-code">
-        <label>Name</label>
-        <input id="name" placeholder="Your name" value="Player">
-        <div class="row" style="margin-top:10px">
-          <button id="btnJoin" class="btn-primary" type="button">Join Room</button>
-        </div>
-      </div>
-
-      <div id="status" class="pill">Status: Waiting to join…</div>
-
-      <div id="lobbyArea" class="card hidden">
-        <div class="row" style="align-items:center;justify-content:space-between">
-          <div class="pill">Pick a character, then tap “I’m Ready”.</div>
-          <div id="readyPill" class="pill no">Not Ready</div>
-        </div>
-
-        <div id="charGrid"></div>
-
-        <div class="row" style="margin-top:10px">
-          <button id="btnReady" class="btn-accent btn-disabled" disabled type="button">I’m Ready</button>
-        </div>
-      </div>
-
-      <!-- TURN / ROLL OVERLAY -->
-      <div id="turnOrder" class="card hidden">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-          <div class="pill" id="rollTitle">Roll</div>
-          <div id="rollState" class="pill no">Waiting…</div>
-        </div>
-
-        <div style="margin:12px 0;display:flex;flex-direction:column;gap:10px;align-items:center">
-          <div id="rollValue" style="font-size:42px;line-height:1;font-weight:700;letter-spacing:.02em">—</div>
-          <button id="btnRoll" class="btn-primary" type="button">Tap to Roll</button>
-        </div>
-
-        <div id="orderResult" class="hidden" style="margin-top:10px;font-size:14px;color:#c9d1d9"></div>
-      </div>
-
-      <pre id="log" class="hidden"></pre>
-      <div id="toast"></div>
-      <div id="dbg">last: —</div>
+  <!-- JOIN -->
+  <section id="join-card" class="card">
+    <h1>Join Game</h1>
+    <label>Room Code
+      <input id="roomCode" placeholder="ABCDE" maxlength="6" autocomplete="off">
+    </label>
+    <label>Your Name
+      <input id="playerName" placeholder="Name" maxlength="20" autocomplete="off">
+    </label>
+    <div class="row">
+      <button id="btnJoin">Join</button>
+      <button id="btnResume" class="secondary hidden">Resume</button>
     </div>
+    <p class="hint">Server base can be overridden by URL: <code>?api=https://host</code> &amp; <code>?ws=wss://relay</code></p>
+  </section>
 
-   <script type="module" src="./js/main.js?v=11.0.12"></script>
-  </body>
+  <!-- LOBBY -->
+  <section id="lobby" class="card hidden">
+    <h2>Choose Your Character</h2>
+    <div id="catalogGrid" class="grid"></div>
+    <div class="row">
+      <button id="btnReady" disabled>I'm Ready</button>
+    </div>
+    <div id="lobbyInfo" class="note"></div>
+  </section>
+
+  <!-- ROLL OVERLAY -->
+  <section id="rollOverlay" class="overlay hidden">
+    <div class="overlay-card">
+      <h2 id="rollLabel">Roll</h2>
+      <div id="rollSub" class="note"></div>
+      <button id="btnRoll">Tap to Roll</button>
+      <div id="rollResults" class="results"></div>
+      <button id="btnCloseRoll" class="secondary hidden">Close</button>
+    </div>
+  </section>
+
+  <!-- GENERIC SCREEN -->
+  <section id="screen" class="card hidden">
+    <h2 id="screenTitle">Screen</h2>
+    <div id="screenBody"></div>
+  </section>
+
+  <script type="module" src="./js/main.js?v=1.0.0"></script>
+</body>
 </html>
