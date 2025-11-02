@@ -19,12 +19,18 @@ let hydrateAttempts = 0;
 let catalogRenderTimer = 0;
 
 const seenMessages = new Map();
-let lastLobbyVisible = false;
+let lastLobbyVisible = null;
 let lastPhaseValue = state.phase || '';
 let rollOverlayVisible = false;
 
 function isLobbyShowing(){
-  if (lastLobbyVisible) return true;
+  const lobbyEl = state.els?.lobbyArea;
+  if (lobbyEl?.classList) {
+    const visible = !lobbyEl.classList.contains('hidden');
+    lastLobbyVisible = visible;
+    return visible;
+  }
+  if (typeof lastLobbyVisible === 'boolean') return lastLobbyVisible;
   const phase = String(state.phase || '').toLowerCase();
   return phase === 'lobby';
 }
@@ -574,17 +580,24 @@ function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
     return;
   }
   const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
+  const lobbyShowing = isLobbyShowing();
+
   if (shouldShow) {
+    if (lobbyShowing) {
+      maybeSetLobbyVisible(false);
+      hideJoinCard();
+    }
     if (!rollOverlayVisible) {
       showRollOverlay();
       rollOverlayVisible = true;
     }
     if (immediateUpdate) updateRollUI();
-  } else if (rollOverlayVisible) {
+    return;
+  }
+
+  if (rollOverlayVisible) {
     hideRollOverlay();
     rollOverlayVisible = false;
-  } else if (immediateUpdate && rollOverlayVisible) {
-    updateRollUI();
   }
 }
 
@@ -785,7 +798,7 @@ function handleBoardRollSnapshot(raw) {
   const allow = raw.canRoll || raw.allowRoll || raw.rollAllowed || raw.prompt === true;
   const prompt = typeof raw.prompt === 'string' ? raw.prompt : raw.message || raw.text;
   const title = raw.title || raw.heading || 'Roll';
-  const lobbyShowing = isLobbyShowing();
+  let lobbyShowing = isLobbyShowing();
 
   const myId = state.playerId ? String(state.playerId) : null;
   const rolled = gatherRolledIds(raw);
@@ -794,6 +807,10 @@ function handleBoardRollSnapshot(raw) {
   if (allow) {
     state.canRollNow = true;
     state.inTurnOrder = !!raw.turnOrder;
+    if (lobbyShowing) {
+      maybeSetLobbyVisible(false);
+      lobbyShowing = isLobbyShowing();
+    }
     if (!lobbyShowing) {
       showRollOverlay({ title, prompt: prompt || 'Tap ROLL to move.' });
       rollOverlayVisible = true;
