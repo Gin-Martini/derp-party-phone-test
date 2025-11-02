@@ -617,13 +617,6 @@ function buildLobbySignature(snapshot, catalogEntries) {
 }
 
 function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
-  if (isLobbyShowing()) {
-    if (rollOverlayVisible) {
-      hideRollOverlay();
-      rollOverlayVisible = false;
-    }
-    return;
-  }
   const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
   const lobbyShowing = isLobbyShowing();
 
@@ -643,6 +636,12 @@ function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
   if (rollOverlayVisible) {
     hideRollOverlay();
     rollOverlayVisible = false;
+  }
+
+  if (lobbyShowing && rollOverlayVisible === false) {
+    // If we were showing the lobby while a roll prompt was pending, ensure it can
+    // stay visible once the prompt clears.
+    maybeSetLobbyVisible(shouldLobbyBeVisible());
   }
 }
 
