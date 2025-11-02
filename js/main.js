@@ -5,6 +5,7 @@ import { state } from './state.js?v=11.0.12';
 import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase } from './ui.js?v=11.0.12';
 import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.12';
 import { onSocketMessage } from './router.js?v=11.0.12';
+import { wireRollButton, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
 
 // Minimal status helpers (works even if ui wiring hiccups)
 const $ = (s)=>document.querySelector(s);
@@ -261,6 +262,9 @@ function tryAutoResume(){
 // --- BOOT ---
 function boot(){
   initUi();       // wire DOM refs so router/catalog can render the grid
+  wireRollButton();
+  hideRollOverlay();
+  updateRollUI();
   const initialCatalog = Array.isArray(state._pendingCatalog) ? state._pendingCatalog : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
   renderCatalog(initialCatalog);
   bindJoin();
