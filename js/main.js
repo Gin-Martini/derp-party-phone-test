@@ -1,13 +1,16 @@
-// js/main.js — phone bootstrap (fix: set state before WS; call initUi; cache-bust ALL module imports)
+// js/main.js — phone bootstrap (fixes + robust boot; cache-bust ALL module imports)
 import * as WS from './ws.js?v=11.0.12';
 import { renderCatalog, extractCatalogEntries } from './features/catalog.js?v=11.0.12';
 import { state } from './state.js?v=11.0.12';
-import { initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase, setReadyUI, enableReadyButton, showToast } from './ui.js?v=11.0.12';
+import {
+  initUi, hideJoinCard, resetToLobbyUi, setLobbyVisible, setPhase,
+  setReadyUI, enableReadyButton, showToast
+} from './ui.js?v=11.0.12';
 import { HTTP_BASE, SESSION_KEY } from './config.js?v=11.0.12';
 import { onSocketMessage } from './router.js?v=11.0.12';
 import { wireRollButton, updateRollUI, hideRollOverlay } from './features/rollOverlay.js?v=11.0.12';
 
-// Minimal status helpers (works even if ui wiring hiccups)
+// --- tiny DOM helpers ---
 const $ = (s)=>document.querySelector(s);
 function setStatus(s, busy=false){
   const el = $('#status');
@@ -20,8 +23,25 @@ function toast(msg){
   clearTimeout(toast._to); toast._to = setTimeout(()=>t.style.display='none', 1500);
 }
 
+// --- session cache ---
 let storedSession = null;
 
+// Auto-resume (supports old and new keys)
+function loadStoredSession(){
+  try {
+    const raw = localStorage.getItem(SESSION_KEY) || localStorage.getItem('dp.session');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function clearStoredSession(){
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+  try { localStorage.removeItem('dp.session'); } catch {}
+  storedSession = null;
+  hideResumeButton();
+  updateJoinButtonLabel(false);
+}
+
+// --- READY pipeline (original semantics) ---
 function buildReadyPayload(nextReady) {
   const ready = !!nextReady;
   const status = ready ? 'READY' : 'NOT_READY';
@@ -44,7 +64,6 @@ function buildReadyPayload(nextReady) {
   if (!characterId) delete base.characterId;
   return base;
 }
-
 function pushReadyState(nextReady) {
   const base = buildReadyPayload(nextReady);
   const intents = nextReady
@@ -70,11 +89,9 @@ function pushReadyState(nextReady) {
     try { WS.wsSend?.({ type: key, ...base }); } catch {}
   });
 }
-
 function onReadyClicked(ev) {
   ev?.preventDefault?.();
-  const btn = $('#btnReady');
-  if (!btn) return;
+  const btn = $('#btnReady'); if (!btn) return;
 
   const hasChar = String(state.myCharId || '').trim().length > 0;
   if (!hasChar && !state.myReady) {
@@ -85,6 +102,7 @@ function onReadyClicked(ev) {
   }
 
   const nextReady = !state.myReady;
+  state.myReady = nextReady;
   setReadyUI(nextReady);
   pushReadyState(nextReady);
   btn.blur?.();
@@ -94,18 +112,17 @@ window._READY = onReadyClicked;
 // Wire the router immediately so the very first WS messages (HELLO/CATALOG) are handled.
 WS.setOnSocketMessage(onSocketMessage);
 
-function updateJoinButtonLabel(hasStored){
+// --- Resume / Switch Room helpers ---
+function updateJoinButtonLabel(hasResume){
   const btn = $('#btnJoin'); if (!btn) return;
-  btn.textContent = hasStored ? 'Join New Room' : 'Join Room';
+  btn.textContent = hasResume ? 'Join New Room' : 'Join Room';
 }
-
 function showResumeButton(room){
   const btn = $('#btnResume');
   if (!btn) return;
   btn.textContent = room ? `Resume ${room}` : 'Resume Session';
   btn.classList.remove('hidden');
 }
-
 function hideResumeButton(){
   const btn = $('#btnResume');
   if (btn) {
@@ -114,7 +131,7 @@ function hideResumeButton(){
   }
 }
 
-// --- JOIN FLOW ---
+// --- JOIN flow ---
 async function onJoinClicked(e){
   e?.preventDefault?.();
   WS.cancelReconnect?.();
@@ -165,7 +182,7 @@ async function onJoinClicked(e){
     hideResumeButton();
     updateJoinButtonLabel(false);
 
-    // Persist (use canonical v2 key so reconnects work across pages)
+    // Persist canonical key for rejoin
     try { localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId: room, playerId, name })); } catch {}
 
     setStatus('Joined. Connecting…', true);
@@ -187,64 +204,29 @@ async function onJoinClicked(e){
 }
 window._JOIN = onJoinClicked; // debug helper
 
-// --- UI BINDINGS ---
-function bindJoin(){
-  const btn = $('#btnJoin'); if (!btn) return;
-  const fire = (e)=>onJoinClicked(e);
-  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
-  $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
-}
-
-function bindReady(){
-  const btn = $('#btnReady'); if (!btn) return;
-  btn.addEventListener('click', onReadyClicked, { passive: false });
-}
-
-function onResetClicked(e){
-  e?.preventDefault?.();
-  WS.cancelReconnect?.();
-  try { state.ws?.close?.(); } catch {}
-  state.shouldReconnect = false;
-  state.roomId = '';
-  state.playerId = '';
-  clearStoredSession();
-  resetToLobbyUi();
-  setStatus('Waiting to join…');
-  toast('Session cleared. Enter room code.');
-}
-
-function bindSessionControls(){
-  const btn = $('#btnReset'); if (!btn) return;
-  const fire = (e)=>onResetClicked(e);
-  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
-}
-
+// --- Resume flow (uses stored playerId; no extra POST) ---
 function onResumeClicked(e){
   e?.preventDefault?.();
   WS.cancelReconnect?.();
 
   const session = storedSession || loadStoredSession();
   if (!session?.roomId || !session?.playerId){
-    storedSession = null;
-    hideResumeButton();
-    updateJoinButtonLabel(false);
-    toast('Saved session not found. Enter a room code.');
-    return;
+    storedSession = null; hideResumeButton(); updateJoinButtonLabel(false);
+    toast('Saved session not found. Enter a room code.'); return;
   }
-
   storedSession = session;
+
   const room = String(session.roomId || '').trim().toUpperCase();
   const playerId = String(session.playerId || '').trim();
   if (!room || !playerId){
-    storedSession = null;
-    hideResumeButton();
-    updateJoinButtonLabel(false);
-    toast('Saved session was incomplete. Enter a room code.');
-    return;
+    storedSession = null; hideResumeButton(); updateJoinButtonLabel(false);
+    toast('Saved session was incomplete. Enter a room code.'); return;
   }
 
   const name = (session.name || '').trim();
+  if ($('#room')) $('#room').value = room;
   if ($('#name')) $('#name').value = name || $('#name').value || 'Player';
+
   state.roomId = room;
   state.playerId = playerId;
   state.shouldReconnect = true;
@@ -252,25 +234,12 @@ function onResumeClicked(e){
   hideResumeButton();
   updateJoinButtonLabel(false);
 
-  setStatus('Reconnecting…', true);
+  setStatus(`Resuming ${room}…`, true);
   hideJoinCard();
   WS.connectWs?.();
 }
 
-function bindResume(){
-  const btn = $('#btnResume'); if (!btn) return;
-  const fire = (e)=>onResumeClicked(e);
-  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, {passive:false}));
-}
-
-// --- AUTO-RESUME (supports old and new keys) ---
-function loadStoredSession(){
-  try {
-    const raw = localStorage.getItem(SESSION_KEY) || localStorage.getItem('dp.session');
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
-
+// --- Reset/query helpers ---
 function shouldResetFromQuery(){
   try {
     const params = new URLSearchParams(window.location.search);
@@ -281,19 +250,8 @@ function shouldResetFromQuery(){
     if (normalized === '' || normalized === '1' || normalized === 'true' || normalized === 'yes') return true;
     if (normalized === '0' || normalized === 'false' || normalized === 'no') return false;
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
-
-function clearStoredSession(){
-  try { localStorage.removeItem(SESSION_KEY); } catch {}
-  try { localStorage.removeItem('dp.session'); } catch {}
-  storedSession = null;
-  hideResumeButton();
-  updateJoinButtonLabel(false);
-}
-
 function maybeResetFromQuery(){
   if (!shouldResetFromQuery()) return false;
   WS.cancelReconnect?.();
@@ -313,40 +271,87 @@ function maybeResetFromQuery(){
   } catch {}
   return true;
 }
-
 function tryAutoResume(){
   storedSession = loadStoredSession();
   if (!storedSession?.roomId || !storedSession?.playerId){
-    storedSession = null;
-    hideResumeButton();
-    updateJoinButtonLabel(false);
-    return;
+    storedSession = null; hideResumeButton(); updateJoinButtonLabel(false); return;
   }
-
   const room = String(storedSession.roomId || '').trim().toUpperCase();
   const name = (storedSession.name || '').trim();
   if ($('#room')) $('#room').value = room;
   if ($('#name')) $('#name').value = name || 'Player';
-
   updateJoinButtonLabel(true);
   showResumeButton(room);
   setStatus(room ? `Saved session found for room ${room}. Tap Resume or Switch Room.` : 'Saved session found. Tap Resume or Switch Room.');
 }
 
-// --- BOOT ---
-function boot(){
-  initUi();       // wire DOM refs so router/catalog can render the grid
-  wireRollButton();
-  hideRollOverlay();
-  updateRollUI();
-  const initialCatalog = Array.isArray(state._pendingCatalog) ? state._pendingCatalog : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
-  renderCatalog(initialCatalog);
-  bindJoin();
-  bindReady();
-  bindResume();
-  bindSessionControls();
-  const didReset = maybeResetFromQuery();
-  if (!didReset) tryAutoResume();
-  else updateJoinButtonLabel(false);
+// --- UI bindings (fail-safe) ---
+function bindJoin(){
+  const btn = $('#btnJoin'); if (!btn) return;
+  const fire = (e)=> onJoinClicked(e);
+  btn.onclick = fire; // hard fallback
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, { passive:false }));
+  $('#room')?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onJoinClicked(e); });
 }
-document.addEventListener('DOMContentLoaded', boot);
+function bindReady(){
+  const btn = $('#btnReady'); if (!btn) return;
+  btn.addEventListener('click', onReadyClicked, { passive:false });
+}
+function onResetClicked(e){
+  e?.preventDefault?.();
+  WS.cancelReconnect?.();
+  try { state.ws?.close?.(); } catch {}
+  state.shouldReconnect = false;
+  state.roomId = '';
+  state.playerId = '';
+  clearStoredSession();
+  resetToLobbyUi();
+  setStatus('Waiting to join…');
+  toast('Session cleared. Enter room code.');
+}
+function bindSessionControls(){
+  const btn = $('#btnReset'); if (!btn) return;
+  const fire = (e)=> onResetClicked(e);
+  btn.onclick = fire; // fallback
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, { passive:false }));
+}
+function bindResume(){
+  const btn = $('#btnResume'); if (!btn) return;
+  const fire = (e)=> onResumeClicked(e);
+  btn.onclick = fire;
+  ['click','pointerup','touchend'].forEach(evt => btn.addEventListener(evt, fire, { passive:false }));
+}
+
+// --- BOOT (robust) ---
+function boot(){
+  try {
+    initUi();               // wire DOM refs so router/catalog can render the grid
+    wireRollButton();
+    hideRollOverlay();
+    updateRollUI();
+
+    const initialCatalog = Array.isArray(state._pendingCatalog)
+      ? state._pendingCatalog
+      : (Array.isArray(state.catalog?.entries) ? state.catalog.entries : []);
+    renderCatalog(initialCatalog);
+  } catch (err){
+    console.error('boot error (pre-bind):', err);
+  } finally {
+    try { bindJoin(); } catch {}
+    try { bindReady(); } catch {}
+    try { bindResume(); } catch {}
+    try { bindSessionControls(); } catch {}
+
+    let didReset = false;
+    try { didReset = maybeResetFromQuery(); } catch {}
+    if (!didReset) { try { tryAutoResume(); } catch {} } else { updateJoinButtonLabel(false); }
+  }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  try { boot(); } catch (e) { console.error('boot immediate failed:', e); }
+}
+
+// expose for debugging
+if (typeof window !== 'undefined') window.dpBoot = boot;
