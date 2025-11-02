@@ -23,6 +23,12 @@ let lastLobbyVisible = false;
 let lastPhaseValue = state.phase || '';
 let rollOverlayVisible = false;
 
+function isLobbyShowing(){
+  if (lastLobbyVisible) return true;
+  const phase = String(state.phase || '').toLowerCase();
+  return phase === 'lobby';
+}
+
 function maybeSetPhase(next){
   if (!next) return;
   const clean = String(next);
@@ -560,6 +566,13 @@ function buildLobbySignature(snapshot, catalogEntries) {
 }
 
 function updateRollOverlayVisibility({ immediateUpdate = false } = {}) {
+  if (isLobbyShowing()) {
+    if (rollOverlayVisible) {
+      hideRollOverlay();
+      rollOverlayVisible = false;
+    }
+    return;
+  }
   const shouldShow = !!state.canRollNow || !!state.inTurnOrder;
   if (shouldShow) {
     if (!rollOverlayVisible) {
@@ -772,6 +785,7 @@ function handleBoardRollSnapshot(raw) {
   const allow = raw.canRoll || raw.allowRoll || raw.rollAllowed || raw.prompt === true;
   const prompt = typeof raw.prompt === 'string' ? raw.prompt : raw.message || raw.text;
   const title = raw.title || raw.heading || 'Roll';
+  const lobbyShowing = isLobbyShowing();
 
   const myId = state.playerId ? String(state.playerId) : null;
   const rolled = gatherRolledIds(raw);
@@ -780,9 +794,14 @@ function handleBoardRollSnapshot(raw) {
   if (allow) {
     state.canRollNow = true;
     state.inTurnOrder = !!raw.turnOrder;
-    showRollOverlay({ title, prompt: prompt || 'Tap ROLL to move.' });
+    if (!lobbyShowing) {
+      showRollOverlay({ title, prompt: prompt || 'Tap ROLL to move.' });
+      rollOverlayVisible = true;
+    } else {
+      hideRollOverlay();
+      rollOverlayVisible = false;
+    }
     updateRollUI({ msg: prompt || 'Tap ROLL to move.' });
-    rollOverlayVisible = true;
   } else {
     state.canRollNow = false;
     if (!state.inTurnOrder) hideRollOverlay();
