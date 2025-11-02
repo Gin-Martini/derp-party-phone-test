@@ -3,13 +3,20 @@ import { setLobbyVisible, renderCatalog, setReadyEnabled, showRollOverlay, hideR
          setRollPrompt, setRollResults, setStatus, showJoin, showScreen, renderScreen } from './views/ui.js';
 
 function applySeq(seq) {
-  if (typeof seq !== 'number') return true;            // accept system messages
-  if (seq <= state.lastSeq) return false;              // stale
+  if (typeof seq !== 'number') return true;
+  if (seq <= state.lastSeq) return false;
   state.lastSeq = seq;
   return true;
 }
 
-export function reduceEnvelope(msg) {
+export function reduceEnvelope(incoming) {
+  // Compat: unwrap C# envelopes if any slipped through ws.js
+  let msg = incoming;
+  if (String(msg?.type).startsWith('StateEnvelope') && msg?.payload) {
+    const inner = msg.payload;
+    msg = { v: inner.v || 1, type: inner.type || 'STATE', seq: msg.seq ?? inner.seq ?? 0, payload: inner.payload ?? inner };
+  }
+
   const { type, seq, payload } = msg;
 
   switch (type) {
@@ -21,7 +28,7 @@ export function reduceEnvelope(msg) {
     case 'ROLL_PROMPT':
       if (!applySeq(seq)) return;
       state.rollPrompt = payload;
-      // Only show if phase is roll_turn_order and I'm allowed and haven't rolled
+      // Only show if phase is roll_turn_order and I'm eligible
       const meId = state.me?.id;
       const allowed = payload?.allowedPlayers || [];
       const already = new Set(payload?.alreadyRolled || []);
@@ -49,7 +56,6 @@ export function reduceEnvelope(msg) {
       break;
 
     case 'PING':
-      // Transport handles PONG.
       break;
 
     default:
@@ -59,12 +65,10 @@ export function reduceEnvelope(msg) {
 }
 
 function applyState(snap) {
-  // Exact shape, no heuristics.
   state.phase = snap?.phase || 'disconnected';
   state.me    = snap?.me    || null;
   state.lobby = snap?.lobby || null;
 
-  // UI switching
   if (state.phase === 'lobby') {
     showScreen(false);
     setLobbyVisible(true);
@@ -72,10 +76,9 @@ function applyState(snap) {
   } else if (state.phase === 'roll_turn_order') {
     setLobbyVisible(false);
     showScreen(false);
-    // ROLL_PROMPT will decide overlay visibility
+    // ROLL_PROMPT decides overlay visibility
   } else {
     setLobbyVisible(false);
-    // Show generic screen if we have one
     showScreen(!!state.lastScreen);
     if (state.lastScreen) renderScreen(state.lastScreen, state.me?.id);
   }
@@ -85,6 +88,5 @@ function renderLobby() {
   const catalog = state.lobby?.catalog;
   const entries = Array.isArray(catalog?.entries) ? catalog.entries : [];
   renderCatalog(entries, state);
-  // Ready button only active if I have a character selected
   setReadyEnabled(Boolean(state.me?.charId));
 }
