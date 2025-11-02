@@ -18,9 +18,16 @@ export const state = {
   catalog: null,
   _pendingCatalog: null,
   catalogFingerprint: null,
+  catalogVersion: null,
+  hydrated: false,
+  _hydratedVersion: null,
+  _rehydrateRequested: false,
+  _rehydrateRequestedVersion: null,
+  _rehydrateTimer: 0,
   myReady: false,
   myCharId: null,
   takenChars: new Set(),
+  _lastRehydrateAt: 0,
 
   // turn / roll
   myHasRolled: false,
