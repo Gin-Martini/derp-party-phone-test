@@ -41,9 +41,27 @@ export const state = {
   // DOM refs (wired by ui.init)
   $: null,
   els: {
-    log: null, status: null, joinCard: null, lobbyArea: null,
-    readyBtn: null, readyPill: null, charGrid: null, nameInput: null, dbg: null,
-    rollPanel: null, rollBtn: null, rollTitle: null, rollState: null, rollValue: null, orderResult: null
+    log: null,
+    status: null,
+    joinCard: null,
+    lobbyArea: null,
+    joinBtn: null,
+    resumeBtn: null,
+    resetBtn: null,
+    roomInput: null,
+    nameInput: null,
+    sessionControls: null,
+    readyBtn: null,
+    readyPill: null,
+    charGrid: null,
+    dbg: null,
+    toast: null,
+    rollPanel: null,
+    rollBtn: null,
+    rollTitle: null,
+    rollState: null,
+    rollValue: null,
+    orderResult: null
   },
 
   // trivia pad refs
