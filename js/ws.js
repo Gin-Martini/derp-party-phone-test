@@ -1,4 +1,4 @@
-// js/ws.js — phone WS layer (fixed handshake)
+// js/ws.js — phone WS layer (fixed watchdog; no UI thrash on slow host)
 import { state } from './state.js?v=11.0.12';
 import { setPhase, setStatus, setLobbyVisible, showToast, resetToLobbyUi } from './ui.js?v=11.0.12';
 import { saveSession, clearSession } from './session.js?v=11.0.12';
@@ -14,7 +14,7 @@ const TERMINAL_CLOSE_REASON_PATTERNS = [
 function isTerminalClose(ev){
   const code = Number(ev?.code) || 0;
   if (code && TERMINAL_CLOSE_CODES?.has?.(code)) return true;
-  if (code >= 4400) return true; // policy / auth class codes from relay
+  if (code >= 4400) return true; // relay policy/auth codes
   const reason = (ev?.reason || '').trim();
   if (!reason) return false;
   return TERMINAL_CLOSE_REASON_PATTERNS.some((re) => re.test(reason));
@@ -34,8 +34,8 @@ function buildWsUrl() {
   const name = (state.els.nameInput?.value || 'Player').trim() || 'Player';
   const qs = new URLSearchParams({
     room,
-    role: 'player',                    // <- must be 'player'
-    playerId: String(state.playerId || '').trim(),  // <- required
+    role: 'player',
+    playerId: String(state.playerId || '').trim(),
     name
   });
   return `${WS_BASE}?${qs}`;
@@ -45,7 +45,6 @@ function backoff(i){ return Math.min(2000 + i*500, 6000); }
 export function wsSend(obj){
   try { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(obj)); } catch(_){}
 }
-
 export function sendIntent(intentType, payload = {}){
   if (!intentType) return;
   const msg = { type: 'INTENT', intent: intentType, kind: 'INTENT', ...payload };
@@ -55,10 +54,16 @@ export function sendIntent(intentType, payload = {}){
 // reconnect control
 export function scheduleReconnect(reason){
   if (!state.shouldReconnect || !state.roomId || !state.playerId) return;
+
   if ((state.reconnectAttempts|0) >= MAX_RECONNECT_ATTEMPTS){
-    endSession('Rejoin required'); clearSession(); resetToLobbyUi();
-    setStatus('Please re-enter the room code.'); showToast('Connection expired. Rejoin the room.'); return;
+    endSession('Rejoin required');
+    clearSession();
+    resetToLobbyUi();
+    setStatus('Please re-enter the room code.');
+    showToast('Connection expired. Rejoin the room.');
+    return;
   }
+
   setStatus(`Reconnecting… (${reason || 'lost connection'})`, true);
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   const wait = backoff(state.reconnectAttempts++);
@@ -89,7 +94,6 @@ export function connectWs(){
   const room = String(state.roomId || '').trim();
   const player = String(state.playerId || '').trim();
   if (!room || !player) {
-    // Nothing to connect yet — most likely a fresh load that hasn't joined.
     try { setStatus('Waiting to join…'); } catch {}
     state.shouldReconnect = false;
     return;
@@ -102,7 +106,7 @@ export function connectWs(){
   sock.onopen = () => {
     try {
       wsSend({
-        type: 'HELLO_PLAYER',          // <- must be HELLO_PLAYER
+        type: 'HELLO_PLAYER',
         roomId: state.roomId,
         playerId: state.playerId,
         name: (state.els.nameInput?.value||'').trim() || 'Player'
@@ -116,10 +120,20 @@ export function connectWs(){
     state.hbInterval = setInterval(()=> wsSend({ type:'PING' }), 5000);
 
     if (state._firstMsgWatch) clearTimeout(state._firstMsgWatch);
+    // Less aggressive watchdog: if we already have lobby content, don't tear it down.
     state._firstMsgWatch = setTimeout(()=>{
-      endSession('Session expired or room closed'); clearSession(); resetToLobbyUi();
-      setStatus('Room missing/expired. Re-enter code.'); showToast('Room not found or expired.');
-    }, 4000);
+      const hasGrid = !!(state.els.charGrid && state.els.charGrid.children.length);
+      if (state.hydrated || hasGrid) {
+        setStatus('Waiting for host…');   // non-destructive
+        scheduleRehydrate(1200);
+        return;
+      }
+      endSession('Session expired or room closed');
+      clearSession();
+      resetToLobbyUi();
+      setStatus('Room missing/expired. Re-enter code.');
+      showToast('Room not found or expired.');
+    }, 12000);
 
     scheduleRehydrate(300);
   };
@@ -128,7 +142,6 @@ export function connectWs(){
     if (state._firstMsgWatch) { clearTimeout(state._firstMsgWatch); state._firstMsgWatch = 0; }
 
     let payload = ev?.data;
-
     try {
       if (payload instanceof Blob) {
         payload = await payload.text();
@@ -139,11 +152,8 @@ export function connectWs(){
       if (typeof payload === 'string') {
         const trimmed = payload.trim();
         if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-          try {
-            payload = JSON.parse(trimmed);
-          } catch {
-            payload = trimmed; // fall through to string handling downstream
-          }
+          try { payload = JSON.parse(trimmed); }
+          catch { payload = trimmed; }
         } else {
           payload = trimmed;
         }
@@ -178,7 +188,7 @@ export function connectWs(){
   };
 }
 
-// teardown used by scheduleReconnect
+// teardown used by scheduleReconnect / terminal close
 function endSession(reason='Disconnected'){
   state.shouldReconnect = false;
   if (state.hbInterval) { clearInterval(state.hbInterval); state.hbInterval = 0; }
@@ -188,7 +198,9 @@ function endSession(reason='Disconnected'){
   try { state.ws && state.ws.close(); } catch {}
   state.ws = null;
 
-  setStatus(reason); setPhase('lobby'); setLobbyVisible(false);
+  setStatus(reason);
+  setPhase('lobby');
+  setLobbyVisible(false);
   state.els.joinCard?.classList.remove('hidden');
 }
 
