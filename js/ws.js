@@ -20,6 +20,13 @@ export function loadStoredSession() { const s = sessionFromStorage(); if (s) sta
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY);
   state.session = null;
+  state.lastSeq = 0;
+  state.phase = 'disconnected';
+  state.me = null;
+  state.lobby = null;
+  state.rollPrompt = null;
+  state.rollResults = null;
+  state.lastScreen = null;
   setResumeAvailable(null);
 }
 
