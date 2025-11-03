@@ -1,7 +1,7 @@
 // js/ws.js — thin WS client with IDENTIFY + legacy HELLO
 import { state } from './state.js';
 import { SESSION_KEY, ROOM_HINT, NAME_HINT } from './config.js';
-import { setStatus } from './views/ui.js';
+import { setStatus, setResumeAvailable } from './views/ui.js';
 
 let ws = null;
 
@@ -17,7 +17,11 @@ export function saveSession(sess) {
 
 export function hasStoredSession() { return !!sessionFromStorage(); }
 export function loadStoredSession() { const s = sessionFromStorage(); if (s) state.session = s; return s; }
-export function clearSession() { localStorage.removeItem(SESSION_KEY); state.session = null; }
+export function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+  state.session = null;
+  setResumeAvailable(null);
+}
 
 export function wsConnect() {
   if (!state.session?.wsUrl) { setStatus('No WS URL; join first.'); return; }

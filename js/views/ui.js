@@ -54,6 +54,22 @@ export function setLobbyVisible(yes){
   el.lobby.classList.toggle('hidden', !yes);
 }
 
+export function setResumeAvailable(session){
+  const has = !!session;
+  el.btnResume.classList.toggle('hidden', !has);
+  if (has) {
+    const room = String(session?.roomId || '').trim();
+    el.btnResume.textContent = room ? `Resume ${room}` : 'Resume';
+  } else {
+    el.btnResume.textContent = 'Resume';
+  }
+}
+
+export function setJoinFields({ room = '', name = '' } = {}){
+  if (el.roomCode) el.roomCode.value = room;
+  if (el.playerName) el.playerName.value = name;
+}
+
 export function setReadyEnabled(enabled){
   el.btnReady.disabled = !enabled;
   el.btnReady.textContent = state.me?.ready ? 'Ready ✔' : "I'm Ready";
