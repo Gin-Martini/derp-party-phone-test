@@ -68,7 +68,8 @@ function identify() {
 
   if (!roomId) return;
 
-  send({ v:1, type:'IDENTIFY', roomId, playerId, payload:{ token, lastSeq: state.lastSeq || 0, name, role:'player' } });
+  const senderId = playerId || undefined;
+  send({ v:1, type:'IDENTIFY', roomId, playerId, senderId, payload:{ token, lastSeq: state.lastSeq || 0, name, role:'player' } });
 }
 
 // Lowest-risk legacy join trigger
@@ -83,8 +84,27 @@ export function send(obj) {
   ws.send(JSON.stringify(obj));
 }
 
+function ensurePlayerId(candidate) {
+  const existing = (candidate || state.session?.playerId || sessionFromStorage()?.playerId || '').trim();
+  if (existing) return existing;
+
+  if (typeof crypto !== 'undefined') {
+    if (typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    if (typeof crypto.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    }
+  }
+
+  return `p-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+}
+
 export function saveDirectWsSession({ wsUrl, roomId='', playerId='', token='', displayName='' }) {
-  saveSession({ wsUrl, roomId, playerId, token, displayName });
+  const stableId = ensurePlayerId(playerId);
+  saveSession({ wsUrl, roomId, playerId: stableId, token, displayName });
 }
 
 // Normalize various host shapes (bare DTOs, envelopes) into {type,seq,payload}
