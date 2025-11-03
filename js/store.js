@@ -115,6 +115,16 @@ function applyState(payload) {
   if (!Array.isArray(state.lobby.players)) state.lobby.players = [];
   if (!Array.isArray(state.lobby.catalog.entries)) state.lobby.catalog.entries = [];
 
+  const meId = state.me?.id;
+  if (!meId) {
+    if (state.session?.playerId) {
+      clearSession();
+    }
+    setLobbyVisible(false);
+    showJoin(true);
+    return;
+  }
+
   // Phase → UI
   const phase = String(state.phase || '').toLowerCase();
   if (phase === 'lobby') {
@@ -122,6 +132,7 @@ function applyState(payload) {
     setLobbyVisible(true);
     renderLobby();
   } else {
+    showJoin(false);
     setLobbyVisible(false);
   }
 }
