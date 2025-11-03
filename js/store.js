@@ -5,6 +5,7 @@ import {
   showRollOverlay, hideRollOverlay, setRollPrompt, setRollResults,
   setStatus, showJoin, showScreen, renderScreen
 } from './views/ui.js';
+import { clearSession } from './ws.js';
 
 function applySeq(seq) {
   if (typeof seq !== 'number') return true;
@@ -54,14 +55,44 @@ export function reduceEnvelope(incoming) {
       if (state.lastScreen) renderScreen(state.lastScreen, state.me?.id);
       break;
 
-    case 'ERROR':
-      setStatus(String(payload?.message || 'Error'));
+    case 'ERROR': {
+      const message = String(payload?.message || 'Error');
+      setStatus(message);
+      if (shouldResetSession(payload)) {
+        clearSession();
+        setLobbyVisible(false);
+        showJoin(true);
+      }
       break;
+    }
 
     default:
       // ignore unknown messages
       break;
   }
+}
+
+function shouldResetSession(payload) {
+  const code = payload?.code;
+  if (code) {
+    const normalized = String(code).toUpperCase();
+    if (normalized === 'ROOM_NOT_FOUND' ||
+        normalized === 'UNKNOWN_ROOM' ||
+        normalized === 'INVALID_SESSION' ||
+        normalized === 'SESSION_EXPIRED') {
+      return true;
+    }
+  }
+
+  const message = String(payload?.message || '').toLowerCase();
+  if (!message) return false;
+
+  return message.includes('room not found') ||
+         message.includes('no such room') ||
+         message.includes('unknown room') ||
+         message.includes('room does not exist') ||
+         message.includes('room expired') ||
+         message.includes('room closed');
 }
 
 // ----- STATE / PATCH handling -----
