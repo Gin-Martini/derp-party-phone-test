@@ -85,7 +85,8 @@ function applyState(payload) {
   if (!Array.isArray(state.lobby.catalog.entries)) state.lobby.catalog.entries = [];
 
   // Phase → UI
-  if (state.phase === 'lobby') {
+  const phase = String(state.phase || '').toLowerCase();
+  if (phase === 'lobby') {
     showJoin(false);
     setLobbyVisible(true);
     renderLobby();
