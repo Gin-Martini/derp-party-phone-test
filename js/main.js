@@ -1,44 +1,36 @@
-// js/main.js — click Join → build ws URL → save session → connect
-import { state } from './state.js';
-import { API_BASE, WS_BASE, ROOM_HINT, NAME_HINT } from './config.js';
-import { setStatus, bindJoinUI, showJoin, setLobbyVisible, setResumeAvailable, setJoinFields } from './views/ui.js';
-import { reduceEnvelope } from './store.js';
-import { wsConnect, saveDirectWsSession, hasStoredSession, loadStoredSession } from './ws.js';
+// js/main.js — phone bootstrap (cache-busted imports, auto-join)
+import { state } from './state.js?v=11.0.13';
+import { API_BASE, WS_BASE, ROOM_HINT, NAME_HINT } from './config.js?v=11.0.13';
+import { setStatus, bindJoinUI, showJoin, setLobbyVisible, setResumeAvailable, setJoinFields } from './views/ui.js?v=11.0.13';
+import { reduceEnvelope } from './store.js?v=11.0.13';
+import { wsConnect, saveDirectWsSession, hasStoredSession, loadStoredSession } from './ws.js?v=11.0.13';
 
-// expose reducer for ws.js callback
+// Expose reducer for ws.js
 window.reduceEnvelope = reduceEnvelope;
 
-// ----- boot UI (do NOT show lobby yet) -----
+// ----- boot UI (start on Join) -----
 setStatus('Disconnected');
 setLobbyVisible(false);
 showJoin(true);
 setResumeAvailable(null);
 
-bindJoinUI({
-  onJoin: onJoinClicked,
-  onResume: tryResume,
-  onReadyClick: () => {},
-  onRollClick:  () => {},
-  onCloseRoll:  () => {}
-});
+// Pre-fill from URL hints and show Resume if present
+setJoinFields({ room: ROOM_HINT || '', name: NAME_HINT || '' });
 
 const storedSession = hasStoredSession() ? loadStoredSession() : null;
-
-setJoinFields({
-  room: ROOM_HINT || storedSession?.roomId || '',
-  name: NAME_HINT || storedSession?.displayName || '',
-});
-
-// If link pre-fills room/name, move straight to connect
-if (ROOM_HINT) {
+if (ROOM_HINT && NAME_HINT) {
+  // Auto-join when link contains ?room&name
   const wsUrl = `${WS_BASE}?room=${encodeURIComponent(ROOM_HINT)}&role=player`;
-  saveDirectWsSession({ wsUrl, roomId: ROOM_HINT, displayName: NAME_HINT || '' });
+  saveDirectWsSession({ wsUrl, roomId: ROOM_HINT, displayName: NAME_HINT });
   showJoin(false);
   wsConnect();
 } else if (storedSession) {
   setResumeAvailable(storedSession);
   setStatus('Tap Resume to rejoin or enter a new room code.');
 }
+
+// ----- Join / Resume wiring -----
+bindJoinUI({ onJoinClicked, onResumeClicked: tryResume });
 
 async function onJoinClicked(e){
   e?.preventDefault?.();
