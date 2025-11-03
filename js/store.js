@@ -25,20 +25,6 @@ export function reduceEnvelope(incoming) {
 
   const { type, seq, payload } = msg;
 
-  // Legacy compatibility: some hosts still broadcast bare STATE objects
-  // with top-level fields instead of a payload wrapper. Detect that shape
-  // and treat the message body as the payload so the lobby can render.
-  if ((type === 'STATE' || type === 'BROADCAST_STATE') && !payload &&
-      (msg.phase !== undefined || msg.me !== undefined || msg.lobby !== undefined)) {
-    if (!applySeq(seq)) return;
-    applyState({
-      phase: msg.phase,
-      me: msg.me,
-      lobby: msg.lobby
-    });
-    return;
-  }
-
   switch (type) {
     case 'STATE':
     case 'BROADCAST_STATE': {  // safety: treat as STATE
