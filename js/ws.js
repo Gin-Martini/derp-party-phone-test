@@ -1,20 +1,19 @@
-// js/ws.js — thin WS client with IDENTIFY + legacy HELLO
+// js/ws.js — robust WS client: unskippable HELLO, safe IDENTIFY, light logging
 import { state } from './state.js';
-import { SESSION_KEY, ROOM_HINT, NAME_HINT } from './config.js';
+import { SESSION_KEY, ROOM_HINT, NAME_HINT, WS_BASE } from './config.js';
 import { setStatus, setResumeAvailable } from './views/ui.js';
 
 let ws = null;
 
+// --- storage/session helpers ---
 function sessionFromStorage() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); }
   catch { return null; }
 }
-
 export function saveSession(sess) {
   state.session = sess;
   localStorage.setItem(SESSION_KEY, JSON.stringify(sess));
 }
-
 export function hasStoredSession() { return !!sessionFromStorage(); }
 export function loadStoredSession() { const s = sessionFromStorage(); if (s) state.session = s; return s; }
 export function clearSession() {
@@ -30,6 +29,7 @@ export function clearSession() {
   setResumeAvailable(null);
 }
 
+// --- connect ---
 export function wsConnect() {
   if (!state.session?.wsUrl) { setStatus('No WS URL; join first.'); return; }
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -42,9 +42,10 @@ export function wsConnect() {
   ws.onopen = () => {
     state.connected = true;
     setStatus('Connected');
-    // Send both: modern IDENTIFY and legacy HELLO to trigger host join path
-    identify();
-    legacyHello();
+
+    // Send HELLO first (lowest-risk relay trigger), then IDENTIFY.
+    try { legacyHello(); } catch (e) { console.error('[ws] HELLO failed:', e); }
+    try { identify(); } catch (e) { console.error('[ws] IDENTIFY failed:', e); }
   };
 
   ws.onclose = () => { state.connected = false; setStatus('Disconnected'); };
@@ -53,30 +54,37 @@ export function wsConnect() {
   ws.onmessage = (ev) => {
     let raw; try { raw = JSON.parse(ev.data); } catch { return; }
     if (!raw || typeof raw !== 'object' || !raw.type) return;
-
     const msg = normalize(raw);
-
     if (window.reduceEnvelope) window.reduceEnvelope(msg);
   };
 }
 
+// --- join frames ---
 function identify() {
   const roomId   = state.session?.roomId || ROOM_HINT || undefined;
   const playerId = state.session?.playerId || undefined;
   const token    = state.session?.token || undefined;
   const name     = state.session?.displayName || NAME_HINT || undefined;
-
   if (!roomId) return;
 
   const senderId = playerId || undefined;
-  send({ v:1, type:'IDENTIFY', roomId, playerId, senderId, payload:{ token, lastSeq: state.lastSeq || 0, name, role:'player' } });
+  const obj = {
+    v: 1,
+    type: 'IDENTIFY',
+    roomId, playerId, senderId,
+    payload: { token, lastSeq: state.lastSeq || 0, name, role: 'player' }
+  };
+  send(obj);
+  // dev aid (remove if noisy)
+  console.debug('[ws→relay] IDENTIFY', {roomId, playerId, name});
 }
 
-// Lowest-risk legacy join trigger
+// Always fire this—even if IDENTIFY errored—so relay can emit PLAYER_JOINED to host.
 function legacyHello() {
   const name = state.session?.displayName || NAME_HINT || 'Player';
   send({ v:1, type:'HELLO', value:name });
   send({ v:1, type:'SET_NAME', value:name });
+  console.debug('[ws→relay] HELLO/SET_NAME', name);
 }
 
 export function send(obj) {
@@ -87,18 +95,14 @@ export function send(obj) {
 function ensurePlayerId(candidate) {
   const existing = (candidate || state.session?.playerId || sessionFromStorage()?.playerId || '').trim();
   if (existing) return existing;
-
   if (typeof crypto !== 'undefined') {
-    if (typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID();
-    }
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
     if (typeof crypto.getRandomValues === 'function') {
       const bytes = new Uint8Array(16);
       crypto.getRandomValues(bytes);
       return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
     }
   }
-
   return `p-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
 
@@ -109,12 +113,10 @@ export function saveDirectWsSession({ wsUrl, roomId='', playerId='', token='', d
 
 // Normalize various host shapes (bare DTOs, envelopes) into {type,seq,payload}
 function normalize(raw) {
-  // canonical or adjacent
   if (raw.payload || raw.type === 'STATE' || raw.type === 'BROADCAST_STATE' ||
       raw.type === 'ROLL_PROMPT' || raw.type === 'ROLL_RESULT' || raw.type === 'SCREEN' || raw.type === 'ERROR') {
-    return raw.type === 'BROADCAST_STATE' ? { ...raw, type:'STATE' } : raw;
+    return raw.type === 'BROADCAST_STATE' ? { ...raw, type: 'STATE' } : raw;
   }
-  // Envelope class name from C# generic (e.g., "StateEnvelope`1")
   if (String(raw.type).startsWith('StateEnvelope')) {
     const inner = raw.payload || {};
     return {
