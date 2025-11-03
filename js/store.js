@@ -7,9 +7,10 @@ import {
 } from './views/ui.js';
 import { clearSession } from './ws.js';
 
-function applySeq(seq) {
+function applySeq(seq, { allowEqual = false } = {}) {
   if (typeof seq !== 'number') return true;
-  if (seq <= state.lastSeq) return false;
+  if (seq < state.lastSeq) return false;
+  if (seq === state.lastSeq && !allowEqual) return false;
   state.lastSeq = seq;
   return true;
 }
@@ -40,10 +41,12 @@ export function reduceEnvelope(incoming) {
 
   switch (type) {
     case 'STATE':
-    case 'BROADCAST_STATE':   // safety: treat as STATE
-      if (!applySeq(seq)) return;
+    case 'BROADCAST_STATE': {  // safety: treat as STATE
+      const allowEqualSeq = payload && Array.isArray(payload.patches);
+      if (!applySeq(seq, { allowEqual: allowEqualSeq })) return;
       applyState(payload);
       break;
+    }
 
     case 'ROLL_PROMPT':
       if (!applySeq(seq)) return;

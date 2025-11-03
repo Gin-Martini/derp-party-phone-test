@@ -55,7 +55,6 @@ export function wsConnect() {
     if (!raw || typeof raw !== 'object' || !raw.type) return;
 
     const msg = normalize(raw);
-    if (typeof msg.seq === 'number') state.lastSeq = msg.seq;
 
     if (window.reduceEnvelope) window.reduceEnvelope(msg);
   };
