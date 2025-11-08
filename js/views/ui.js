@@ -5,6 +5,7 @@ export const $ = (sel) => document.querySelector(sel);
 const el = {
   status: $('#status'),
   join:   $('#join-card'),
+  joinForm: $('#joinForm'),
   lobby:  $('#lobby'),
   grid:   $('#catalogGrid'),
   btnReady: $('#btnReady'),
@@ -33,17 +34,29 @@ export function setStatus(s, busy=false){
   if (busy) el.status.classList.add('busy'); else el.status.classList.remove('busy');
 }
 
-export function bindJoinUI({ onJoin, onResume, onReadyClick, onRollClick, onCloseRoll }) {
-  el.btnJoin.addEventListener('click', onJoin);
-  el.btnResume.addEventListener('click', onResume);
+export function bindJoinUI({
+  onJoin = () => {},
+  onResume = () => {},
+  onReadyClick = () => {},
+  onRollClick = () => {},
+  onCloseRoll = () => {},
+} = {}) {
+  if (el.joinForm) {
+    el.joinForm.addEventListener('submit', onJoin);
+  } else if (el.btnJoin) {
+    el.btnJoin.addEventListener('click', onJoin);
+  }
+  if (el.btnResume) el.btnResume.addEventListener('click', onResume);
 
-  el.btnReady.addEventListener('click', () => {
-    const next = !(state.me?.ready);
-    onReadyClick(next);
-  });
+  if (el.btnReady) {
+    el.btnReady.addEventListener('click', () => {
+      const next = !(state.me?.ready);
+      onReadyClick(next);
+    });
+  }
 
-  el.btnRoll.addEventListener('click', onRollClick);
-  el.btnCloseRoll.addEventListener('click', onCloseRoll);
+  if (el.btnRoll) el.btnRoll.addEventListener('click', onRollClick);
+  if (el.btnCloseRoll) el.btnCloseRoll.addEventListener('click', onCloseRoll);
 }
 
 export function showJoin(yes){

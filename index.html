@@ -13,18 +13,20 @@
 
   <!-- JOIN -->
   <section id="join-card" class="card">
-    <h1>Join Game</h1>
-    <label>Room Code
-      <input id="roomCode" placeholder="ABCDE" maxlength="6" autocomplete="off">
-    </label>
-    <label>Your Name
-      <input id="playerName" placeholder="Name" maxlength="20" autocomplete="off">
-    </label>
-    <div class="row">
-      <button id="btnJoin">Join</button>
-      <button id="btnResume" class="secondary hidden">Resume</button>
-    </div>
-    <p class="hint">Server base can be overridden by URL: <code>?api=https://host</code> &amp; <code>?ws=wss://relay</code></p>
+    <form id="joinForm">
+      <h1>Join Game</h1>
+      <label>Room Code
+        <input id="roomCode" placeholder="ABCDE" maxlength="6" autocomplete="off">
+      </label>
+      <label>Your Name
+        <input id="playerName" placeholder="Name" maxlength="20" autocomplete="off">
+      </label>
+      <div class="row">
+        <button id="btnJoin" type="submit">Join</button>
+        <button id="btnResume" type="button" class="secondary hidden">Resume</button>
+      </div>
+      <p class="hint">Server base can be overridden by URL: <code>?api=https://host</code> &amp; <code>?ws=wss://relay</code></p>
+    </form>
   </section>
 
   <!-- LOBBY -->
@@ -54,6 +56,6 @@
     <div id="screenBody"></div>
   </section>
 
-  <script type="module" src="./js/main.js?v=11.0.13"></script>
+  <script type="module" src="./js/main.js?v=11.0.14"></script>
 </body>
 </html>

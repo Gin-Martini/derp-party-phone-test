@@ -1,9 +1,9 @@
 // js/main.js — phone bootstrap (cache-busted imports, auto-join)
-import { state } from './state.js?v=11.0.13';
-import { API_BASE, WS_BASE, ROOM_HINT, NAME_HINT } from './config.js?v=11.0.13';
-import { setStatus, bindJoinUI, showJoin, setLobbyVisible, setResumeAvailable, setJoinFields } from './views/ui.js?v=11.0.13';
-import { reduceEnvelope } from './store.js?v=11.0.13';
-import { wsConnect, saveDirectWsSession, hasStoredSession, loadStoredSession } from './ws.js?v=11.0.13';
+import { state } from './state.js?v=11.0.14';
+import { API_BASE, WS_BASE, ROOM_HINT, NAME_HINT } from './config.js?v=11.0.14';
+import { setStatus, bindJoinUI, showJoin, setLobbyVisible, setResumeAvailable, setJoinFields } from './views/ui.js?v=11.0.14';
+import { reduceEnvelope } from './store.js?v=11.0.14';
+import { wsConnect, saveDirectWsSession, hasStoredSession, loadStoredSession } from './ws.js?v=11.0.14';
 
 // Expose reducer for ws.js
 window.reduceEnvelope = reduceEnvelope;
@@ -30,7 +30,7 @@ if (ROOM_HINT && NAME_HINT) {
 }
 
 // ----- Join / Resume wiring -----
-bindJoinUI({ onJoinClicked, onResumeClicked: tryResume });
+bindJoinUI({ onJoin: onJoinClicked, onResume: tryResume });
 
 async function onJoinClicked(e){
   e?.preventDefault?.();
