@@ -30,7 +30,7 @@ if (ROOM_HINT && NAME_HINT) {
 }
 
 // ----- Join / Resume wiring -----
-bindJoinUI({ onJoinClicked, onResumeClicked: tryResume });
+bindJoinUI({ onJoin: onJoinClicked, onResume: tryResume });
 
 async function onJoinClicked(e){
   e?.preventDefault?.();
