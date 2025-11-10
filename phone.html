@@ -126,6 +126,7 @@
       }
 
       let ws, playerId, roomId, hbInterval;
+      let playerName = '';
       let myReady = false;
       let myCharId = null;
       let knownCatalog = [];
@@ -259,7 +260,7 @@
         players.forEach(p => { if (p && p.charId) derivedTaken.add(String(p.charId)); });
         markTaken([...derivedTaken]);
 
-        const me = players.find(p => p && (p.playerId === playerId || (!p.playerId && p.name && p.name === $('name').value.trim())));
+        const me = players.find(p => p && (p.playerId === playerId || (!p.playerId && p.name && p.name === playerName)));
         if (me){
           if (me.charId) myCharId = String(me.charId);
           myReady = !!me.ready;
@@ -272,6 +273,7 @@
       $('btnJoin').onclick = async () => {
         roomId = $('room').value.trim().toUpperCase();
         const name = $('name').value.trim() || 'Player';
+        playerName = name;
         if(!roomId){ alert('Enter room code.'); return; }
 
         if (ws && ws.readyState < WebSocket.CLOSED){
@@ -329,6 +331,17 @@
         ws.onopen = () => {
           log('WS open.');
           ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
+          ws.send(JSON.stringify({
+            type: 'JOIN',
+            roomId,
+            playerId,
+            senderId: playerId,
+            role: 'player',
+            payload: {
+              name,
+              role: 'player'
+            }
+          }));
           setStatus('Connected. In Lobby.', true);
           $('joinCard').classList.add('hidden');
           setLobbyVisible(true);
