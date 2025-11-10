@@ -110,6 +110,7 @@
       function setLobbyVisible(on){ $('lobbyArea').classList.toggle('hidden', !on); }
       function setReadyPill(on){ const p=$('readyPill'); p.textContent=on?'Ready':'Not Ready'; p.classList.toggle('ok',on); p.classList.toggle('no',!on); }
       function enableReadyButton(can){ const b=$('btnReady'); b.disabled=!can; b.classList.toggle('btn-disabled',!can); }
+      function refreshReadyUI(){ setReadyPill(myReady); enableReadyButton(!!myCharId && !myReady); }
 
       function ensureGridVisible(){ const grid=$('charGrid'); grid.style.display='grid'; return grid; }
 
@@ -161,7 +162,7 @@
 
         markTaken([...takenChars]);
         markSelected(myCharId);
-        enableReadyButton(!!myCharId);
+        refreshReadyUI();
         ensureGridVisible();
       }
 
@@ -192,15 +193,20 @@
         ws.send(JSON.stringify({ type:'CHARACTER_SELECT', charId:id, ts: Date.now() }));
         log('> CHARACTER_SELECT ' + id);
         myCharId = id;
+        myReady = false;
         markSelected(myCharId);
-        enableReadyButton(true);
+        refreshReadyUI();
       }
 
       function applyCharacterPicked(playerIdPicked, charIdPicked){
-        if (playerIdPicked === playerId){ myCharId = charIdPicked; showToast('Picked: ' + charIdPicked); enableReadyButton(true); }
+        if (playerIdPicked === playerId){
+          myCharId = charIdPicked;
+          showToast('Picked: ' + charIdPicked);
+        }
         takenChars.add(String(charIdPicked));
         markTaken([...takenChars]);
         markSelected(myCharId);
+        refreshReadyUI();
       }
 
       function sendReady(){
@@ -208,9 +214,30 @@
         if (!myCharId){ showToast('Pick a character first'); return; }
         if (myReady) return;
         myReady = true;
-        setReadyPill(true);
         ws.send(JSON.stringify({ type:'PLAYER_READY', ts: Date.now() }));
         log('> PLAYER_READY');
+        refreshReadyUI();
+      }
+
+      function syncLobbyState(state){
+        const players = state.players || [];
+        const text = players.length
+          ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
+          : '—';
+        setStatus('Lobby: ' + text, true);
+
+        const derivedTaken = new Set(state.taken || []);
+        players.forEach(p => { if (p && p.charId) derivedTaken.add(String(p.charId)); });
+        markTaken([...derivedTaken]);
+
+        const me = players.find(p => p && (p.playerId === playerId || (!p.playerId && p.name && p.name === $('name').value.trim())));
+        if (me){
+          if (me.charId) myCharId = String(me.charId);
+          myReady = !!me.ready;
+        }
+
+        markSelected(myCharId);
+        refreshReadyUI();
       }
 
       $('btnJoin').onclick = async () => {
@@ -251,12 +278,7 @@
                 break;
 
               case 'LOBBY_STATE': {
-                const players = s.players||[];
-                const text = players.length
-                  ? players.map(p => `${p.name}${p.ready?' ✅':''}${p.charId?(' · '+p.charId):''}`).join(', ')
-                  : '—';
-                setStatus('Lobby: ' + text, true);
-                markTaken(s.taken||[]);
+                syncLobbyState(s);
                 break;
               }
 
@@ -267,6 +289,21 @@
 
               case 'CHARACTER_PICKED':
                 applyCharacterPicked(s.playerId, s.charId);
+                break;
+
+              case 'CHARACTER_RELEASED':
+                takenChars.delete(String(s.charId));
+                markTaken([...takenChars]);
+                refreshReadyUI();
+                break;
+
+              case 'PLAYER_READY':
+                if (s.playerId === playerId){ myReady = true; refreshReadyUI(); }
+                break;
+
+              case 'PLAYER_UNREADY':
+              case 'PLAYER_READY_CANCELLED':
+                if (s.playerId === playerId){ myReady = false; refreshReadyUI(); }
                 break;
 
               case 'READY_OPEN':  showToast('Ready phase open'); break;
@@ -293,8 +330,7 @@
           clearInterval(hbInterval);
           myReady = false; myCharId = null; takenChars.clear(); knownCatalog = [];
           $('charGrid').innerHTML = '';
-          enableReadyButton(false);
-          setReadyPill(false);
+          refreshReadyUI();
         };
       };
 
