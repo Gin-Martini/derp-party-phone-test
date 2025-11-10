@@ -95,6 +95,32 @@
     <script>
       const params = new URLSearchParams(window.location.search);
       const DEFAULT_BASE = 'https://derpparty-relay.fly.dev';
+      const STORAGE_KEY = 'derp-party-phone-state';
+
+      function loadStoredState(){
+        if (typeof localStorage === 'undefined') return {};
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return (parsed && typeof parsed === 'object') ? parsed : {};
+        } catch (err) {
+          console.warn('Failed to load stored state', err);
+          return {};
+        }
+      }
+
+      function persistState(state){
+        if (typeof localStorage === 'undefined') return;
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (err) {
+          console.warn('Failed to persist state', err);
+        }
+      }
+
+      const storedState = loadStoredState();
+      if (!storedState.rooms || typeof storedState.rooms !== 'object') storedState.rooms = {};
 
       function ensureProtocol(url, prefer){
         const cleaned = (url || '').trim();
@@ -109,6 +135,13 @@
       const HTTP_BASE = (httpBaseCandidate.startsWith('http') ? httpBaseCandidate : httpBaseCandidate.replace(/^ws/i, 'http')).replace(/\/+$/, '');
       const WS_BASE   = (wsBaseCandidate.startsWith('ws') ? wsBaseCandidate : wsBaseCandidate.replace(/^http/i, 'ws')).replace(/\/+$/, '');
       const WS_URL    = `${WS_BASE}/socket`;
+
+      function createLocalPlayerId(){
+        if (window.crypto && typeof window.crypto.randomUUID === 'function'){
+          return `p-${window.crypto.randomUUID()}`;
+        }
+        return `p-${Math.random().toString(36).slice(2,10)}`;
+      }
 
       function buildWsUrl(room, player){
         try {
@@ -126,6 +159,8 @@
       }
 
       let ws, playerId, roomId, hbInterval;
+      let playerName = '';
+      let playerToken = '';
       let myReady = false;
       let myCharId = null;
       let knownCatalog = [];
@@ -259,7 +294,7 @@
         players.forEach(p => { if (p && p.charId) derivedTaken.add(String(p.charId)); });
         markTaken([...derivedTaken]);
 
-        const me = players.find(p => p && (p.playerId === playerId || (!p.playerId && p.name && p.name === $('name').value.trim())));
+        const me = players.find(p => p && (p.playerId === playerId || (!p.playerId && p.name && p.name === playerName)));
         if (me){
           if (me.charId) myCharId = String(me.charId);
           myReady = !!me.ready;
@@ -269,9 +304,23 @@
         refreshReadyUI();
       }
 
+      const initialRoom = $('room');
+      const initialName = $('name');
+
+      const prefillRoom = (params.get('room') || '').trim();
+      if (prefillRoom) initialRoom.value = prefillRoom.toUpperCase();
+
+      if (storedState && storedState._lastName && !initialName.value){
+        initialName.value = storedState._lastName;
+      }
+
       $('btnJoin').onclick = async () => {
-        roomId = $('room').value.trim().toUpperCase();
-        const name = $('name').value.trim() || 'Player';
+        roomId = initialRoom.value.trim().toUpperCase();
+        const nameInput = initialName.value.trim();
+        const name = nameInput || storedState?._lastName || 'Player';
+        playerName = name;
+        playerId = null;
+        playerToken = '';
         if(!roomId){ alert('Enter room code.'); return; }
 
         if (ws && ws.readyState < WebSocket.CLOSED){
@@ -284,6 +333,10 @@
 
         let wsFromServer = '';
 
+        let joinAttempted = false;
+        let joinFailedResponse = false;
+        const storedForRoom = (storedState && storedState.rooms && storedState.rooms[roomId]) || null;
+
         try{
           const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
             method:'POST',
@@ -291,7 +344,9 @@
             body: JSON.stringify({ name }),
             mode:'cors',
           });
+          joinAttempted = true;
           if(!resp.ok){
+            joinFailedResponse = true;
             const text = await resp.text().catch(()=> '');
             log('Join HTTP failed: ' + resp.status + (text ? (' ' + text) : ''));
             setStatus(`Join failed (${resp.status})`);
@@ -307,6 +362,7 @@
             return;
           }
           playerId = j.playerId;
+          playerToken = j.token || '';
           log('Got playerId: ' + playerId);
           wsFromServer = j.socketUrl || j.wsUrl || '';
           if (wsFromServer){
@@ -321,7 +377,37 @@
               wsFromServer = '';
             }
           }
-        }catch(e){ log('HTTP error: ' + e); setStatus('HTTP error'); return; }
+        }catch(e){
+          log('Join HTTP error: ' + e);
+          if (joinFailedResponse) return;
+          const fallbackId = storedForRoom && storedForRoom.playerId
+            ? storedForRoom.playerId
+            : createLocalPlayerId();
+          playerId = fallbackId;
+          playerToken = (storedForRoom && storedForRoom.token) || '';
+          setStatus('Relay HTTP unavailable, trying direct connect…');
+        }
+
+        if (!playerId){
+          if (storedForRoom && storedForRoom.playerId){
+            playerId = storedForRoom.playerId;
+            playerToken = storedForRoom.token || '';
+          } else if (!joinAttempted){
+            const generated = createLocalPlayerId();
+            playerId = generated;
+            playerToken = '';
+          }
+        }
+
+        if (!playerId){
+          setStatus('Join failed (no player id)');
+          return;
+        }
+
+        storedState._lastName = name;
+        storedState.rooms = storedState.rooms || {};
+        storedState.rooms[roomId] = { playerId, token: playerToken, name };
+        persistState(storedState);
 
         const wsUrl = (typeof wsFromServer === 'string' && wsFromServer) ? wsFromServer : buildWsUrl(roomId, playerId);
         log('WS connect -> ' + wsUrl);
@@ -329,6 +415,19 @@
         ws.onopen = () => {
           log('WS open.');
           ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
+          const identifyPayload = {
+            name,
+            role: 'player'
+          };
+          if (playerToken) identifyPayload.token = playerToken;
+          ws.send(JSON.stringify({
+            type: 'IDENTIFY',
+            roomId,
+            playerId,
+            senderId: playerId,
+            role: 'player',
+            payload: identifyPayload
+          }));
           setStatus('Connected. In Lobby.', true);
           $('joinCard').classList.add('hidden');
           setLobbyVisible(true);
