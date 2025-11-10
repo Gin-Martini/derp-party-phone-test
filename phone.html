@@ -93,8 +93,37 @@
     </div>
 
     <script>
-      const WS_URL    = 'wss://derpparty-relay.fly.dev/socket';
-      const HTTP_BASE = 'https://derpparty-relay.fly.dev';
+      const params = new URLSearchParams(window.location.search);
+      const DEFAULT_BASE = 'https://derpparty-relay.fly.dev';
+
+      function ensureProtocol(url, prefer){
+        const cleaned = (url || '').trim();
+        if (!cleaned) return `${prefer}://`;
+        if (/^https?:/i.test(cleaned) || /^wss?:/i.test(cleaned)) return cleaned;
+        return `${prefer}://${cleaned}`;
+      }
+
+      const rawRelay = (params.get('relay') || DEFAULT_BASE).trim().replace(/\/+$/, '');
+      const httpBaseCandidate = ensureProtocol(rawRelay, 'https');
+      const wsBaseCandidate   = ensureProtocol(rawRelay, 'wss');
+      const HTTP_BASE = (httpBaseCandidate.startsWith('http') ? httpBaseCandidate : httpBaseCandidate.replace(/^ws/i, 'http')).replace(/\/+$/, '');
+      const WS_BASE   = (wsBaseCandidate.startsWith('ws') ? wsBaseCandidate : wsBaseCandidate.replace(/^http/i, 'ws')).replace(/\/+$/, '');
+      const WS_URL    = `${WS_BASE}/socket`;
+
+      function buildWsUrl(room, player){
+        try {
+          const url = new URL(WS_URL);
+          url.searchParams.set('room', room);
+          url.searchParams.set('role', 'player');
+          if (player) url.searchParams.set('playerId', player);
+          return url.toString();
+        } catch (err) {
+          console.warn('Falling back to manual WS url build', err);
+          let query = `room=${encodeURIComponent(room)}&role=player`;
+          if (player) query += `&playerId=${encodeURIComponent(player)}`;
+          return `${WS_URL}?${query}`;
+        }
+      }
 
       let ws, playerId, roomId, hbInterval;
       let myReady = false;
@@ -245,15 +274,58 @@
         const name = $('name').value.trim() || 'Player';
         if(!roomId){ alert('Enter room code.'); return; }
 
+        if (ws && ws.readyState < WebSocket.CLOSED){
+          try { ws.close(1000, 'rejoin'); } catch(_) {}
+        }
+        ws = null;
+
+        setStatus('Joining room…');
+        log(`Join POST ${HTTP_BASE}/rooms/${roomId}/join`);
+
+        let wsFromServer = '';
+
         try{
-          const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, { method:'POST' });
-          if(!resp.ok){ log('Join HTTP failed: ' + resp.status); setStatus('Join failed'); return; }
-          const j = await resp.json();
+          const resp = await fetch(`${HTTP_BASE}/rooms/${roomId}/join`, {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ name }),
+            mode:'cors',
+          });
+          if(!resp.ok){
+            const text = await resp.text().catch(()=> '');
+            log('Join HTTP failed: ' + resp.status + (text ? (' ' + text) : ''));
+            setStatus(`Join failed (${resp.status})`);
+            return;
+          }
+          const j = await resp.json().catch(err => {
+            log('Join JSON parse failed: ' + err);
+            return null;
+          });
+          if (!j || !j.playerId){
+            log('Join response missing playerId. Body=' + JSON.stringify(j));
+            setStatus('Join failed (bad response)');
+            return;
+          }
           playerId = j.playerId;
           log('Got playerId: ' + playerId);
+          wsFromServer = j.socketUrl || j.wsUrl || '';
+          if (wsFromServer){
+            try {
+              const direct = new URL(wsFromServer, WS_BASE + '/');
+              if (!direct.searchParams.has('room')) direct.searchParams.set('room', roomId);
+              if (!direct.searchParams.has('role')) direct.searchParams.set('role', 'player');
+              if (!direct.searchParams.has('playerId')) direct.searchParams.set('playerId', playerId);
+              wsFromServer = direct.toString();
+            } catch(err){
+              log('Failed to use socketUrl from server: ' + err);
+              wsFromServer = '';
+            }
+          }
         }catch(e){ log('HTTP error: ' + e); setStatus('HTTP error'); return; }
 
-        ws = new WebSocket(WS_URL);
+        const wsUrl = (typeof wsFromServer === 'string' && wsFromServer) ? wsFromServer : buildWsUrl(roomId, playerId);
+        log('WS connect -> ' + wsUrl);
+        ws = new WebSocket(wsUrl);
         ws.onopen = () => {
           log('WS open.');
           ws.send(JSON.stringify({ type:'HELLO_PLAYER', roomId, playerId, name }));
